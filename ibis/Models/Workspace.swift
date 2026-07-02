@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 
 /// The live state for a single window: the opened folder (or file), its file
 /// tree, and (in later phases) open tabs and pane layout.
@@ -17,11 +18,50 @@ final class Workspace {
     /// shares one text buffer and unsaved edits survive switching away and back.
     private var documentCache: [URL: OpenDocument] = [:]
 
+    /// Live filesystem watcher that keeps the tree in sync with disk.
+    private var watcher: FileSystemWatcher?
+
     init(rootURL: URL, isDirectory: Bool) {
         self.rootURL = rootURL
         self.isDirectory = isDirectory
         self.access = SecurityScopedAccess(url: rootURL)
         self.rootNode = FileNode(url: rootURL, isDirectory: isDirectory)
+
+        if isDirectory {
+            watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
+                Task { @MainActor in
+                    await self?.handleFileSystemChanges(paths)
+                }
+            }
+        }
+    }
+
+    /// Reloads the loaded directory nodes affected by filesystem changes.
+    private func handleFileSystemChanges(_ paths: [String]) async {
+        var reloaded = Set<URL>()
+        for path in paths {
+            let directory = URL(filePath: path).standardizedFileURL
+            guard !reloaded.contains(directory),
+                  let node = loadedDirectoryNode(matching: directory) else { continue }
+            reloaded.insert(directory)
+            await node.reloadChildrenMerging()
+        }
+    }
+
+    /// Finds an already-loaded directory node whose URL matches, walking only
+    /// loaded branches (unexpanded subtrees refresh themselves when opened).
+    private func loadedDirectoryNode(matching directory: URL) -> FileNode? {
+        let target = directory.standardizedFileURL.path
+        func search(_ node: FileNode) -> FileNode? {
+            if node.isDirectory, node.isLoaded, node.url.standardizedFileURL.path == target {
+                return node
+            }
+            for child in node.children ?? [] where child.isDirectory {
+                if let found = search(child) { return found }
+            }
+            return nil
+        }
+        return search(rootNode)
     }
 
     var displayName: String {
@@ -37,5 +77,61 @@ final class Workspace {
         let document = OpenDocument(url: url)
         documentCache[url] = document
         return document
+    }
+
+    // MARK: - Menu actions (operate on the active pane / document)
+
+    var activeDocument: OpenDocument? {
+        layout.activePane?.selectedDocument
+    }
+
+    func saveActiveDocument() async {
+        await activeDocument?.save()
+    }
+
+    /// Writes the active document's text to a new location chosen by the user,
+    /// then opens that file in the active pane.
+    func saveActiveDocumentAs() {
+        guard let document = activeDocument else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = document.url.lastPathComponent
+        panel.directoryURL = document.url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let text = document.text
+        Task {
+            try? text.write(to: url, atomically: true, encoding: .utf8)
+            let saved = self.document(for: url)
+            await saved.loadIfNeeded()
+            layout.activePane?.open(saved)
+        }
+    }
+
+    func closeActiveTab() {
+        guard let pane = layout.activePane, let url = pane.selectedURL else { return }
+        pane.close(url)
+        if pane.tabDocuments.isEmpty && layout.panes.count > 1 {
+            layout.closePane(pane.id)
+        }
+    }
+
+    func splitActiveEditor() {
+        layout.splitActive()
+    }
+
+    /// Moves selection to an adjacent tab in the active pane, wrapping around.
+    func selectAdjacentTab(offset: Int) {
+        guard let pane = layout.activePane,
+              !pane.tabDocuments.isEmpty,
+              let current = pane.tabDocuments.firstIndex(where: { $0.url == pane.selectedURL })
+        else { return }
+        let count = pane.tabDocuments.count
+        let next = (current + offset + count) % count
+        pane.selectedURL = pane.tabDocuments[next].url
+    }
+
+    func revealActiveInFinder() {
+        guard let url = activeDocument?.url else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }

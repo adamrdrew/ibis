@@ -11,10 +11,13 @@ struct IbisApp: App {
     @State private var settings = AppSettings()
 
     var body: some Scene {
-        WindowGroup(for: WorkspaceRef.self) { $ref in
+        WindowGroup(id: workspaceWindowID, for: WorkspaceRef.self) { $ref in
             WorkspaceRootView(ref: ref)
                 .environment(settings)
                 .tint(.ibisKelly)
+        }
+        .commands {
+            IbisCommands(settings: settings)
         }
 
         Settings {

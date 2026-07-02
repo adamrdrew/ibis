@@ -38,4 +38,26 @@ final class FileNode: Identifiable {
         hasLoaded = true
         isLoading = false
     }
+
+    /// Re-reads the directory but keeps existing child nodes for URLs that still
+    /// exist, so expansion/loaded state of surviving subtrees is preserved. Used
+    /// when the filesystem changes under a loaded directory.
+    func reloadChildrenMerging() async {
+        guard isDirectory, hasLoaded else { return }
+
+        let directory = url
+        let entries = await Task.detached(priority: .userInitiated) {
+            FileTreeLoader.contents(of: directory)
+        }.value
+
+        var existing: [URL: FileNode] = [:]
+        for child in children ?? [] {
+            existing[child.url] = child
+        }
+        children = entries.map { entry in
+            existing[entry.url] ?? FileNode(url: entry.url, isDirectory: entry.isDirectory)
+        }
+    }
+
+    var isLoaded: Bool { hasLoaded }
 }

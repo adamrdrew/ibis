@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum SidebarMode: Hashable {
+enum SidebarMode: Hashable {
     case files
     case search
 }
@@ -32,18 +32,16 @@ struct WorkspaceView: View {
                 } label: {
                     Label("Search in Folder", systemImage: "magnifyingglass")
                 }
-                .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(workspace == nil)
-                .help("Search in Folder")
+                .help("Search in Folder (⇧⌘F)")
 
                 Button {
                     workspace?.layout.splitActive()
                 } label: {
                     Label("Split Editor", systemImage: "rectangle.split.2x1")
                 }
-                .keyboardShortcut("\\", modifiers: .command)
                 .disabled(activeDocument == nil)
-                .help("Split Editor")
+                .help("Split Editor (⌘\\)")
 
                 Button {
                     if let document = activeDocument {
@@ -52,11 +50,22 @@ struct WorkspaceView: View {
                 } label: {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
-                .keyboardShortcut("s")
                 .disabled(activeDocument?.isDirty != true)
-                .help("Save")
+                .help("Save (⌘S)")
             }
         }
+        // ⌘W closes the active tab (a key-window control, so it takes precedence
+        // over the built-in window Close). Disabled when no tab is open, so ⌘W
+        // then falls through to closing the window.
+        .background {
+            Button("Close Tab") { workspace?.closeActiveTab() }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(activeDocument == nil)
+                .hidden()
+        }
+        // Expose the focused window's workspace and sidebar mode to the menu bar.
+        .focusedValue(\.activeWorkspace, workspace)
+        .focusedValue(\.sidebarMode, $sidebarMode)
         .task(id: ref) {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
