@@ -51,6 +51,7 @@ struct FileOutlineView: NSViewRepresentable {
         // Annotate rows with their file entity so the system offers "Ask Siri".
         outlineView.appIntentsDataSource = context.coordinator
 
+        outlineView.coordinator = context.coordinator
         context.coordinator.outlineView = outlineView
         context.coordinator.installReloadBridge()
         outlineView.reloadData()
@@ -63,7 +64,7 @@ struct FileOutlineView: NSViewRepresentable {
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate, NSMenuDelegate, NSTableViewAppIntentsDataSource {
+    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate, NSMenuDelegate, NSTableViewAppIntentsDataSource, NSMenuItemValidation {
         private let workspace: Workspace
         private let selection: Binding<FileNode.ID?>
         weak var outlineView: TreeOutlineView?
@@ -308,7 +309,12 @@ struct FileOutlineView: NSViewRepresentable {
                 }
                 menu.addItem(menuItem("Copy Path", #selector(copyPath)))
                 menu.addItem(menuItem("Copy Name", #selector(copyName)))
+                menu.addItem(.separator())
+                menu.addItem(menuItem("Copy", #selector(copyItems)))
+                menu.addItem(menuItem("Cut", #selector(cutItems)))
             }
+            menu.addItem(.separator())
+            menu.addItem(menuItem("Paste", #selector(pasteItems)))
         }
 
         private func menuItem(_ title: String, _ action: Selector) -> NSMenuItem {
@@ -382,15 +388,100 @@ struct FileOutlineView: NSViewRepresentable {
         @objc private func copyName() {
             if let node = contextNode { FileOperations.copyToPasteboard(node.name) }
         }
+
+        // MARK: - Copy / Cut / Paste of files
+
+        /// True after a Cut, so the next Paste moves rather than copies.
+        private var pasteboardMove = false
+
+        private var selectedFileNode: FileNode? {
+            guard let outlineView, outlineView.selectedRow >= 0 else { return nil }
+            return outlineView.item(atRow: outlineView.selectedRow) as? FileNode
+        }
+
+        private var pasteDestination: URL {
+            guard let node = selectedFileNode else { return workspace.rootURL }
+            return node.isDirectory ? node.url : node.url.deletingLastPathComponent()
+        }
+
+        var hasSelection: Bool { selectedFileNode != nil }
+
+        func canPaste() -> Bool {
+            NSPasteboard.general.canReadObject(forClasses: [NSURL.self], options: nil)
+        }
+
+        func performCopy(cut: Bool) {
+            guard let node = selectedFileNode else { return }
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.writeObjects([node.url as NSURL])
+            pasteboardMove = cut
+        }
+
+        func performPaste() {
+            let destination = pasteDestination
+            guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL],
+                  !urls.isEmpty else { return }
+            let move = pasteboardMove
+            pasteboardMove = false
+
+            var affected: Set<URL> = [destination]
+            for source in urls {
+                let accessed = source.startAccessingSecurityScopedResource()
+                defer { if accessed { source.stopAccessingSecurityScopedResource() } }
+
+                let target = FileOperations.uniqueURL(in: destination, baseName: source.lastPathComponent)
+                if move {
+                    try? FileManager.default.moveItem(at: source, to: target)
+                    affected.insert(source.deletingLastPathComponent())
+                } else {
+                    try? FileManager.default.copyItem(at: source, to: target)
+                }
+            }
+
+            Task {
+                for directory in affected {
+                    await workspace.reloadDirectory(at: directory)
+                }
+            }
+        }
+
+        @objc private func copyItems() { performCopy(cut: false) }
+        @objc private func cutItems() { performCopy(cut: true) }
+        @objc private func pasteItems() { performPaste() }
+
+        func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+            if menuItem.action == #selector(pasteItems) { return canPaste() }
+            return true
+        }
     }
 }
 
 /// `NSOutlineView` subclass that supplies a per-row context menu, starts a
 /// rename on Return, and vends the selected file to Services / macOS
 /// intelligence.
-final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor {
+final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemValidation {
+    weak var coordinator: FileOutlineView.Coordinator?
+
     private var selectedNode: FileNode? {
         selectedRow >= 0 ? item(atRow: selectedRow) as? FileNode : nil
+    }
+
+    // ⌘C / ⌘X / ⌘V route here (from the standard Edit menu) when the tree is
+    // the first responder, so files copy/cut/paste contextually.
+    @objc func copy(_ sender: Any?) { coordinator?.performCopy(cut: false) }
+    @objc func cut(_ sender: Any?) { coordinator?.performCopy(cut: true) }
+    @objc func paste(_ sender: Any?) { coordinator?.performPaste() }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        switch menuItem.action {
+        case #selector(copy(_:)), #selector(cut(_:)):
+            return coordinator?.hasSelection ?? false
+        case #selector(paste(_:)):
+            return coordinator?.canPaste() ?? false
+        default:
+            return true
+        }
     }
 
     override func keyDown(with event: NSEvent) {
