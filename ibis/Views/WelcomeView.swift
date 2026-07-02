@@ -2,41 +2,51 @@ import SwiftUI
 import AppKit
 
 /// The empty-window landing screen. Offers quick ways to open a file or folder.
-/// Recents and the CLI-install hint arrive in later phases.
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        VStack(spacing: 24) {
-            Image(systemName: "bird.fill")
-                .font(.system(size: 72))
-                .foregroundStyle(.tint)
+        VStack(spacing: 28) {
+            VStack(spacing: 14) {
+                Image(systemName: "bird.fill")
+                    .font(.system(size: 66))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.tint)
 
-            VStack(spacing: 6) {
-                Text("Ibis")
-                    .font(.system(size: 40, weight: .bold, design: .rounded))
-                Text("A text editor for developers")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
+                VStack(spacing: 4) {
+                    Text("Ibis")
+                        .font(.system(size: 38, weight: .bold, design: .rounded))
+                    Text("A text editor for developers")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
             }
 
-            HStack(spacing: 12) {
-                Button {
-                    openPanel(chooseDirectories: false)
-                } label: {
-                    Label("Open File…", systemImage: "doc")
-                }
+            VStack(spacing: 10) {
                 Button {
                     openPanel(chooseDirectories: true)
                 } label: {
                     Label("Open Folder…", systemImage: "folder")
+                        .frame(maxWidth: 240)
                 }
+                .buttonStyle(.borderedProminent)
+
+                Button {
+                    openPanel(chooseDirectories: false)
+                } label: {
+                    Label("Open File…", systemImage: "doc")
+                        .frame(maxWidth: 240)
+                }
+                .buttonStyle(.bordered)
             }
             .controlSize(.large)
-            .buttonStyle(.borderedProminent)
+
+            Text("Tip: run `ibis .` in Terminal to open the current folder.")
+                .font(.footnote)
+                .foregroundStyle(.tertiary)
         }
-        .padding(60)
-        .frame(minWidth: 560, minHeight: 460)
+        .padding(48)
+        .frame(minWidth: 520, minHeight: 440)
     }
 
     private func openPanel(chooseDirectories: Bool) {

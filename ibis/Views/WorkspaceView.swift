@@ -131,7 +131,9 @@ struct WorkspaceView: View {
             usesSoftTabs: settings.usesSoftTabs,
             wordWrap: settings.wordWrap,
             showLineNumbers: settings.showLineNumbers,
-            showInvisibles: settings.showInvisibles
+            showInvisibles: settings.showInvisibles,
+            lightTheme: settings.lightTheme,
+            darkTheme: settings.darkTheme
         )
     }
 

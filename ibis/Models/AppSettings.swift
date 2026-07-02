@@ -12,10 +12,13 @@ final class AppSettings {
     var showLineNumbers: Bool { didSet { defaults.set(showLineNumbers, forKey: Key.showLineNumbers) } }
     var wordWrap: Bool { didSet { defaults.set(wordWrap, forKey: Key.wordWrap) } }
 
+    /// Syntax highlighting themes, used according to the system appearance.
+    var lightTheme: String { didSet { defaults.set(lightTheme, forKey: Key.lightTheme) } }
+    var darkTheme: String { didSet { defaults.set(darkTheme, forKey: Key.darkTheme) } }
+
     // Not yet surfaced in the UI; kept for the editor configuration.
     var lineSpacing: Double = 2
     var showInvisibles: Bool = false
-    var themeName: String = "System"
 
     private let defaults = UserDefaults.standard
 
@@ -29,6 +32,8 @@ final class AppSettings {
         usesSoftTabs = defaults.object(forKey: Key.usesSoftTabs) as? Bool ?? true
         showLineNumbers = defaults.object(forKey: Key.showLineNumbers) as? Bool ?? true
         wordWrap = defaults.object(forKey: Key.wordWrap) as? Bool ?? false
+        lightTheme = defaults.string(forKey: Key.lightTheme) ?? "atom-one-light"
+        darkTheme = defaults.string(forKey: Key.darkTheme) ?? "atom-one-dark"
     }
 
     private enum Key {
@@ -38,5 +43,7 @@ final class AppSettings {
         static let usesSoftTabs = "editor.usesSoftTabs"
         static let showLineNumbers = "editor.showLineNumbers"
         static let wordWrap = "editor.wordWrap"
+        static let lightTheme = "editor.lightTheme"
+        static let darkTheme = "editor.darkTheme"
     }
 }

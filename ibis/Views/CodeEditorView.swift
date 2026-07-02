@@ -11,6 +11,8 @@ struct EditorConfiguration: Equatable {
     var wordWrap: Bool
     var showLineNumbers: Bool
     var showInvisibles: Bool
+    var lightTheme: String
+    var darkTheme: String
 }
 
 /// The code editor: an `NSTextView` (TextKit 1 stack, for a line-number ruler
@@ -150,6 +152,8 @@ struct CodeEditorView: NSViewRepresentable {
         coordinator.baseFont = makeFont()
         coordinator.fontName = configuration.fontName
         coordinator.fontSize = configuration.fontSize
+        coordinator.lightThemeName = configuration.lightTheme
+        coordinator.darkThemeName = configuration.darkTheme
         coordinator.lastConfiguration = configuration
     }
 
@@ -279,7 +283,7 @@ struct CodeEditorView: NSViewRepresentable {
 
             let isDark = textView.effectiveAppearance
                 .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let theme = EditorTheme.name(isDark: isDark)
+            let theme = isDark ? darkThemeName : lightThemeName
 
             let result = await SyntaxHighlighter.shared.highlight(
                 code: code,
@@ -365,6 +369,8 @@ struct CodeEditorView: NSViewRepresentable {
         var baseFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
         var fontName = "SF Mono"
         var fontSize: Double = 13
+        var lightThemeName = EditorTheme.light
+        var darkThemeName = EditorTheme.dark
         var language: String?
         var lastConfiguration: EditorConfiguration?
         /// One-shot: after a document loads, scroll to the very start so the

@@ -19,10 +19,20 @@ struct SettingsView: View {
 private struct EditorSettingsView: View {
     @Environment(AppSettings.self) private var settings
     @State private var fontChoices: [String] = []
+    @State private var themeChoices: [String] = []
 
     var body: some View {
         @Bindable var settings = settings
         Form {
+            Section("Theme") {
+                Picker("Light Mode", selection: $settings.lightTheme) {
+                    ForEach(themeChoices, id: \.self) { Text($0).tag($0) }
+                }
+                Picker("Dark Mode", selection: $settings.darkTheme) {
+                    ForEach(themeChoices, id: \.self) { Text($0).tag($0) }
+                }
+            }
+
             Section("Font") {
                 Picker("Typeface", selection: $settings.fontName) {
                     ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
@@ -49,7 +59,14 @@ private struct EditorSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .task { fontChoices = Self.monospacedFonts(including: settings.fontName) }
+        .task {
+            fontChoices = Self.monospacedFonts(including: settings.fontName)
+            var themes = await SyntaxHighlighter.shared.availableThemes()
+            for required in [settings.lightTheme, settings.darkTheme] where !themes.contains(required) {
+                themes.append(required)
+            }
+            themeChoices = themes.sorted()
+        }
     }
 
     /// Monospaced font families available on the system, plus the current choice.

@@ -50,6 +50,14 @@ actor SyntaxHighlighter {
     private var highlighter: Highlighter?
     private var loadedTheme: String?
 
+    /// All highlight.js theme names available for selection.
+    func availableThemes() -> [String] {
+        if highlighter == nil {
+            highlighter = Highlighter()
+        }
+        return highlighter?.availableThemes().sorted() ?? []
+    }
+
     func highlight(
         code: String,
         language: String,
