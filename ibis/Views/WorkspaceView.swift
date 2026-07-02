@@ -101,7 +101,7 @@ struct WorkspaceView: View {
 
                 switch sidebarMode {
                 case .files:
-                    FileTreeView(workspace: workspace, selection: $selection)
+                    FileOutlineView(workspace: workspace, selection: $selection)
                 case .search:
                     ProjectSearchView(
                         model: searchModel,

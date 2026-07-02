@@ -21,6 +21,10 @@ final class Workspace {
     /// Live filesystem watcher that keeps the tree in sync with disk.
     private var watcher: FileSystemWatcher?
 
+    /// Called after a directory node's children are reloaded (from disk changes
+    /// or our own operations) so the outline view can refresh that item.
+    var onDirectoryReloaded: ((FileNode) -> Void)?
+
     init(rootURL: URL, isDirectory: Bool) {
         self.rootURL = rootURL
         self.isDirectory = isDirectory
@@ -36,6 +40,15 @@ final class Workspace {
         }
     }
 
+    /// Immediately re-reads a directory node (if loaded), for snappy updates
+    /// after our own file operations without waiting for the FSEvents latency.
+    func reloadDirectory(at url: URL) async {
+        if let node = loadedDirectoryNode(matching: url.standardizedFileURL) {
+            await node.reloadChildrenMerging()
+            onDirectoryReloaded?(node)
+        }
+    }
+
     /// Reloads the loaded directory nodes affected by filesystem changes.
     private func handleFileSystemChanges(_ paths: [String]) async {
         var reloaded = Set<URL>()
@@ -45,6 +58,7 @@ final class Workspace {
                   let node = loadedDirectoryNode(matching: directory) else { continue }
             reloaded.insert(directory)
             await node.reloadChildrenMerging()
+            onDirectoryReloaded?(node)
         }
     }
 

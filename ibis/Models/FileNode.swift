@@ -39,6 +39,16 @@ final class FileNode: Identifiable {
         isLoading = false
     }
 
+    /// Synchronously loads children if needed. Used by the `NSOutlineView` data
+    /// source, which is synchronous; reading one directory is fast.
+    func loadChildrenSyncIfNeeded() {
+        guard isDirectory, !hasLoaded else { return }
+        children = FileTreeLoader.contents(of: url).map {
+            FileNode(url: $0.url, isDirectory: $0.isDirectory)
+        }
+        hasLoaded = true
+    }
+
     /// Re-reads the directory but keeps existing child nodes for URLs that still
     /// exist, so expansion/loaded state of surviving subtrees is preserved. Used
     /// when the filesystem changes under a loaded directory.
