@@ -116,6 +116,82 @@ final class Workspace {
         return document
     }
 
+    // MARK: - Layout persistence & restoration
+
+    /// A cheap value that changes whenever the persisted layout would change
+    /// (pane contents, selection, active pane). WorkspaceView observes it to
+    /// know when to persist.
+    var layoutFingerprint: String {
+        var parts: [String] = []
+        for pane in layout.panes {
+            let paths = pane.tabDocuments.compactMap { $0.url?.path(percentEncoded: false) }
+            let selected = pane.selectedDocument?.url?.path(percentEncoded: false) ?? ""
+            parts.append(paths.joined(separator: "|") + ">" + selected)
+        }
+        let activeIndex = layout.panes.firstIndex { $0.id == layout.activePaneID } ?? 0
+        parts.append("active=\(activeIndex)")
+        return parts.joined(separator: ";")
+    }
+
+    /// Snapshots the current layout to the store (directory workspaces only;
+    /// untitled documents, having no path, are skipped).
+    func persistLayoutState() {
+        guard isDirectory else { return }
+        var paneFilePaths: [[String]] = []
+        var selected: [Int] = []
+        for pane in layout.panes {
+            let paths = pane.tabDocuments.compactMap { $0.url?.path(percentEncoded: false) }
+            paneFilePaths.append(paths)
+            if let selectedPath = pane.selectedDocument?.url?.path(percentEncoded: false),
+               let index = paths.firstIndex(of: selectedPath) {
+                selected.append(index)
+            } else {
+                selected.append(-1)
+            }
+        }
+        let activeIndex = layout.panes.firstIndex { $0.id == layout.activePaneID } ?? 0
+        WorkspaceStateStore.save(
+            PersistedWorkspaceState(
+                paneFilePaths: paneFilePaths,
+                selectedTabPerPane: selected,
+                activePaneIndex: activeIndex,
+                savedAt: Date()
+            ),
+            for: rootURL
+        )
+    }
+
+    /// Restores the persisted tabs/panes/selection into a fresh layout. Missing
+    /// files are silently skipped; if everything is gone, the empty state stays.
+    func restorePersistedLayout() async {
+        guard isDirectory,
+              let state = WorkspaceStateStore.load(for: rootURL),
+              layout.panes.count == 1, layout.panes[0].tabDocuments.isEmpty else { return }
+
+        var panes: [EditorPane] = []
+        for (paneIndex, paths) in state.paneFilePaths.enumerated() {
+            let pane = paneIndex == 0 ? layout.panes[0] : EditorPane()
+            for path in paths {
+                let url = URL(filePath: path)
+                guard FileManager.default.fileExists(atPath: url.path) else { continue }
+                let document = document(for: url)
+                await document.loadIfNeeded()
+                pane.open(document)
+            }
+            let selectedIndex = paneIndex < state.selectedTabPerPane.count ? state.selectedTabPerPane[paneIndex] : -1
+            if selectedIndex >= 0, selectedIndex < pane.tabDocuments.count {
+                pane.selectedID = pane.tabDocuments[selectedIndex].id
+            }
+            panes.append(pane)
+        }
+
+        panes = panes.filter { !$0.tabDocuments.isEmpty }
+        guard !panes.isEmpty else { return }
+        layout.panes = panes
+        let activeIndex = min(max(0, state.activePaneIndex), panes.count - 1)
+        layout.activePaneID = panes[activeIndex].id
+    }
+
     // MARK: - Menu actions (operate on the active pane / document)
 
     var activeDocument: OpenDocument? {

@@ -112,6 +112,10 @@ struct WorkspaceView: View {
         // work whenever the window is active, even with no editor focused.
         .focusedSceneValue(\.activeWorkspace, workspace)
         .focusedSceneValue(\.sidebarMode, $sidebarMode)
+        // Persist tabs/panes/selection whenever the layout changes.
+        .onChange(of: workspace?.layoutFingerprint) { _, _ in
+            workspace?.persistLayoutState()
+        }
         // Go to Line prompt (⌘L), driven by the workspace's request flag.
         .alert("Go to Line", isPresented: goToLinePresented) {
             TextField("Line number", text: $goToLineText)
@@ -127,7 +131,10 @@ struct WorkspaceView: View {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
             await workspace.rootNode.loadChildren()
-            if !ref.isDirectory {
+            if ref.isDirectory {
+                // Reopen the tabs/panes/selection from the last session.
+                await workspace.restorePersistedLayout()
+            } else {
                 selection = workspace.rootNode.id
             }
             // Honor an "Open in Agent" request (one-shot; restored windows never
