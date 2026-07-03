@@ -20,6 +20,15 @@ struct IbisCommands: Commands {
     @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        // MARK: App menu — Check for Updates (Sparkle)
+        #if canImport(Sparkle)
+        CommandGroup(after: .appInfo) {
+            Button("Check for Updates…") {
+                (NSApp.delegate as? AppDelegate)?.updaterController.checkForUpdates(nil)
+            }
+        }
+        #endif
+
         // MARK: File
         CommandGroup(replacing: .newItem) {
             Button("New File") {

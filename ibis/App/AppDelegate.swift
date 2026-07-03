@@ -1,9 +1,18 @@
 import AppKit
+#if canImport(Sparkle)
+import Sparkle
+#endif
 
 /// Bridges AppKit application events into SwiftUI. Handles files and folders
 /// opened from Finder or the `ibis` command-line tool (`open -a Ibis <path>`),
 /// routing each to a new workspace window via `LaunchRouter`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    #if canImport(Sparkle)
+    /// Drives auto-updates. Active only once the Sparkle package is added to the
+    /// target (see the SUFeedURL / SUPublicEDKey keys in Info.plist).
+    let updaterController = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+    #endif
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Advertise what the app can hand to Services (and macOS intelligence
         // "Ask"/Writing Tools items) so they appear in the file browser's menu.
