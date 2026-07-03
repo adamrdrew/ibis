@@ -7,49 +7,56 @@ import SwiftMCP
 /// `@MainActor` editor facade). Stateless — all shared state lives in the bridge.
 @MCPServer(name: "ibis", version: "1.0")
 final class IbisMCPServer {
-    /// Open a file in a tab in the active Ibis window. The path may be absolute
+    /// The bearer token of the current connection, which identifies the project
+    /// window this agent is bound to. Every tool routes by this.
+    private func projectToken() async -> String? {
+        guard let session = Session.current else { return nil }
+        return await session.accessToken
+    }
+
+    /// Open a file in a tab in this agent's Ibis window. The path may be absolute
     /// or relative to the workspace root; pass `line` to scroll to a 1-based line.
     @MCPTool(name: "open_file")
     func openFile(path: String, line: Int? = nil) async throws -> String {
-        try await MCPBridge.shared.openFile(path: path, line: line)
+        try await MCPBridge.shared.openFile(token: await projectToken(), path: path, line: line)
     }
 
-    /// The path of the file currently focused in the active Ibis window.
+    /// The path of the file currently focused in this agent's Ibis window.
     @MCPTool(name: "get_active_file", readOnlyHint: true)
     func getActiveFile() async throws -> String {
-        try await MCPBridge.shared.activeFilePath()
+        try await MCPBridge.shared.activeFilePath(token: await projectToken())
     }
 
-    /// The paths of all files open in tabs in the active Ibis window.
+    /// The paths of all files open in tabs in this agent's Ibis window.
     @MCPTool(name: "get_open_tabs", readOnlyHint: true)
     func getOpenTabs() async throws -> [String] {
-        try await MCPBridge.shared.openTabPaths()
+        try await MCPBridge.shared.openTabPaths(token: await projectToken())
     }
 
-    /// The text the human currently has selected in the editor (empty if none).
+    /// The text the human currently has selected in this window (empty if none).
     @MCPTool(name: "get_selection", readOnlyHint: true)
-    func getSelection() async -> String {
-        await MCPBridge.shared.currentSelection() ?? ""
+    func getSelection() async throws -> String {
+        try await MCPBridge.shared.currentSelection(token: await projectToken())
     }
 
-    /// The root folder path of the active Ibis workspace.
+    /// The root folder path of this agent's Ibis workspace.
     @MCPTool(name: "get_workspace_root", readOnlyHint: true)
     func getWorkspaceRoot() async throws -> String {
-        try await MCPBridge.shared.workspaceRootPath()
+        try await MCPBridge.shared.workspaceRootPath(token: await projectToken())
     }
 
-    /// Show a brief, non-blocking banner to the human in the active window.
+    /// Show a brief, non-blocking banner to the human in this window.
     @MCPTool(name: "notify")
-    func notify(message: String) async -> String {
-        await MCPBridge.shared.notify(message)
+    func notify(message: String) async throws -> String {
+        try await MCPBridge.shared.notify(token: await projectToken(), message: message)
         return "Shown."
     }
 
     /// Ask the human a question and wait for their answer. Provide `options` to
     /// present them as buttons; otherwise a single acknowledgement is shown.
     @MCPTool(name: "ask_human")
-    func askHuman(question: String, options: [String] = []) async -> String {
-        await MCPBridge.shared.askHuman(question: question, options: options.isEmpty ? nil : options)
+    func askHuman(question: String, options: [String] = []) async throws -> String {
+        try await MCPBridge.shared.askHuman(token: await projectToken(), question: question, options: options.isEmpty ? nil : options)
     }
 }
 
@@ -65,13 +72,17 @@ final class MCPServerController {
 
     @ObservationIgnored private var transport: HTTPSSETransport?
 
-    func start(preferredPort: Int, token: String) {
+    func start(preferredPort: Int) {
         guard !isRunning, transport == nil else { return }
         let server = IbisMCPServer()
         let transport = HTTPSSETransport(server: server, host: "127.0.0.1", port: preferredPort)
+        // Accept any token that belongs to a currently-open project window. The
+        // token then routes each request to that project (see IbisMCPServer).
         transport.authorizationHandler = { provided in
-            guard !token.isEmpty else { return .authorized }
-            return provided == token ? .authorized : .unauthorized("Invalid token")
+            guard let provided, MCPTokenRegistry.shared.contains(provided) else {
+                return .unauthorized("Unknown or closed project token")
+            }
+            return .authorized
         }
         self.transport = transport
         Task {
@@ -116,7 +127,7 @@ enum MCPService {
     static func apply(settings: AppSettings) {
         #if canImport(SwiftMCP)
         if settings.mcpEnabled {
-            MCPServerController.shared.start(preferredPort: settings.mcpPort, token: settings.mcpToken)
+            MCPServerController.shared.start(preferredPort: settings.mcpPort)
         } else {
             MCPServerController.shared.stop()
         }
@@ -131,9 +142,23 @@ enum MCPService {
         guard settings.mcpEnabled else { return }
         Task {
             try? await Task.sleep(for: .milliseconds(400))
-            MCPServerController.shared.start(preferredPort: settings.mcpPort, token: settings.mcpToken)
+            MCPServerController.shared.start(preferredPort: settings.mcpPort)
         }
         #endif
+    }
+
+    /// Before launching an agent into a project, write that project's MCP config
+    /// (pointing at the running server with the project's token) so the hosted
+    /// agent is automatically bound to its own window. No-op if MCP is off.
+    static func bindAgent(to workspace: Workspace, settings: AppSettings) {
+        guard settings.mcpEnabled, let port = runningPort else { return }
+        let token = MCPBridge.shared.token(for: workspace)
+        _ = try? MCPConfigWriter.write(
+            agent: settings.agentKind,
+            projectRoot: workspace.rootURL,
+            port: port,
+            token: token
+        )
     }
 
     /// The bound port if the server is running, else nil.

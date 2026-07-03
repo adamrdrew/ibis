@@ -4,58 +4,71 @@ import Observation
 /// Errors surfaced to MCP tool callers as human-readable messages.
 enum MCPBridgeError: LocalizedError {
     case noWindow
-    case notFound(String)
 
     var errorDescription: String? {
         switch self {
-        case .noWindow: "No Ibis window is open."
-        case .notFound(let path): "There's no file at \(path)."
+        case .noWindow: "No Ibis window is bound to this agent's project (is it still open?)."
         }
     }
 }
 
-/// The bridge between the (optional) MCP server and the live editor. Everything
-/// here is `@MainActor` and free of any MCP dependency, so the app compiles and
-/// behaves identically whether or not the SwiftMCP package is present — the MCP
-/// server layer is just a thin forwarder onto these methods.
+/// The bridge between the MCP server and the live editor. Everything here is
+/// `@MainActor` and free of any MCP dependency, so the app compiles and behaves
+/// identically whether or not the SwiftMCP package is present.
 ///
-/// It tracks the open workspaces (to resolve "the active window" for a tool) and
-/// the most-recently focused editor (for selection reads), and hosts a transient
-/// banner that windows display for `notify`.
+/// Each open workspace has a stable per-project token. Tool calls carry the
+/// token of the project the agent was launched in (its connection's bearer
+/// token), and every tool routes to *that* window — so an agent can only ever
+/// reach its own project's window, decided by the connection, never per call.
 @MainActor
 @Observable
 final class MCPBridge {
     static let shared = MCPBridge()
     private init() {}
 
-    private var workspaces: [WeakWorkspace] = []
-
-    /// The editor that most recently became first responder, for `get_selection`.
-    @ObservationIgnored weak var activeTextView: NSTextView?
+    /// token → workspace, for routing tool calls.
+    private var byToken: [String: WeakWorkspace] = [:]
 
     /// A transient message posted by `notify`, shown by the frontmost window.
+    /// (Banners are per-window in the UI via `bannerToken`.)
     var banner: String?
+    /// The token of the workspace whose banner should show.
+    @ObservationIgnored var bannerToken: String?
 
     // MARK: Registry
 
-    func register(_ workspace: Workspace) {
+    /// Registers a workspace and returns its stable project token.
+    @discardableResult
+    func register(_ workspace: Workspace) -> String {
         prune()
-        if !workspaces.contains(where: { $0.value === workspace }) {
-            workspaces.append(WeakWorkspace(workspace))
-        }
+        let token = MCPTokenStore.token(for: workspace.rootURL)
+        byToken[token] = WeakWorkspace(workspace, token: token)
+        MCPTokenRegistry.shared.insert(token)
+        return token
     }
 
     func unregister(_ workspace: Workspace) {
-        workspaces.removeAll { $0.value == nil || $0.value === workspace }
+        for (token, box) in byToken where box.value == nil || box.value === workspace {
+            byToken.removeValue(forKey: token)
+            MCPTokenRegistry.shared.remove(token)
+        }
     }
 
     private func prune() {
-        workspaces.removeAll { $0.value == nil }
+        for (token, box) in byToken where box.value == nil {
+            byToken.removeValue(forKey: token)
+            MCPTokenRegistry.shared.remove(token)
+        }
     }
 
-    /// The workspace whose window is frontmost, falling back to any open one.
-    var activeWorkspace: Workspace? {
-        let live = workspaces.compactMap(\.value)
+    /// The project token for a workspace (used by config writing / launch).
+    func token(for workspace: Workspace) -> String {
+        MCPTokenStore.token(for: workspace.rootURL)
+    }
+
+    /// The frontmost workspace, for the Settings UI (not for tool routing).
+    var frontmostWorkspace: Workspace? {
+        let live = byToken.values.compactMap(\.value)
         if let key = NSApp.keyWindow ?? NSApp.mainWindow,
            let match = live.first(where: { $0.window === key }) {
             return match
@@ -63,15 +76,33 @@ final class MCPBridge {
         return live.first
     }
 
-    // MARK: Tools
+    /// Records which editor last had focus, attributing it to its window's
+    /// workspace so `get_selection` reads from the correct window.
+    func noteFocusedEditor(_ textView: NSTextView, in window: NSWindow) {
+        for box in byToken.values {
+            if let workspace = box.value, workspace.window === window {
+                workspace.focusedEditor = textView
+                return
+            }
+        }
+    }
 
-    /// Opens a file in a tab in the active window, optionally scrolling to a
-    /// 1-based line. `path` may be absolute or relative to the workspace root.
-    func openFile(path: String, line: Int?) async throws -> String {
-        guard let workspace = activeWorkspace else { throw MCPBridgeError.noWindow }
+    // MARK: Tool routing
+
+    private func workspace(for token: String?) throws -> Workspace {
+        guard let token, let workspace = byToken[token]?.value else {
+            throw MCPBridgeError.noWindow
+        }
+        return workspace
+    }
+
+    // MARK: Tools (each scoped to the caller's project by token)
+
+    func openFile(token: String?, path: String, line: Int?) async throws -> String {
+        let workspace = try workspace(for: token)
         let url = resolve(path, in: workspace)
         guard FileManager.default.fileExists(atPath: url.path) else {
-            throw MCPBridgeError.notFound(url.path)
+            throw MCPToolFailure("There's no file at \(url.path).")
         }
         let document = workspace.document(for: url)
         await document.loadIfNeeded()
@@ -80,13 +111,13 @@ final class MCPBridge {
         return "Opened \(url.lastPathComponent) in Ibis."
     }
 
-    func activeFilePath() throws -> String {
-        guard let workspace = activeWorkspace else { throw MCPBridgeError.noWindow }
+    func activeFilePath(token: String?) throws -> String {
+        let workspace = try workspace(for: token)
         return workspace.activeDocument?.url?.path ?? "(no file open)"
     }
 
-    func openTabPaths() throws -> [String] {
-        guard let workspace = activeWorkspace else { throw MCPBridgeError.noWindow }
+    func openTabPaths(token: String?) throws -> [String] {
+        let workspace = try workspace(for: token)
         var seen = Set<String>()
         var result: [String] = []
         for pane in workspace.layout.panes {
@@ -99,30 +130,29 @@ final class MCPBridge {
         return result
     }
 
-    func workspaceRootPath() throws -> String {
-        guard let workspace = activeWorkspace else { throw MCPBridgeError.noWindow }
-        return workspace.rootURL.path
+    func workspaceRootPath(token: String?) throws -> String {
+        try workspace(for: token).rootURL.path
     }
 
-    /// The human's current editor selection, or nil if nothing is selected.
-    func currentSelection() -> String? {
-        guard let textView = activeTextView else { return nil }
+    func currentSelection(token: String?) throws -> String {
+        let workspace = try workspace(for: token)
+        guard let textView = workspace.focusedEditor else { return "" }
         let range = textView.selectedRange()
-        guard range.length > 0 else { return nil }
+        guard range.length > 0 else { return "" }
         return (textView.string as NSString).substring(with: range)
     }
 
-    func notify(_ message: String) {
+    func notify(token: String?, message: String) throws {
+        _ = try workspace(for: token)
+        bannerToken = token
         banner = message
     }
 
-    /// Presents a blocking prompt as a sheet on the active window and returns the
-    /// button the human chose. `options` become the buttons (default "OK").
-    func askHuman(question: String, options: [String]?) async -> String {
+    /// Presents a blocking prompt as a sheet on the *caller's* window.
+    func askHuman(token: String?, question: String, options: [String]?) async throws -> String {
+        let workspace = try workspace(for: token)
         let buttons = (options?.isEmpty == false) ? options! : ["OK"]
-        guard let window = activeWorkspace?.window ?? NSApp.keyWindow else {
-            return buttons[0]
-        }
+        guard let window = workspace.window else { return buttons[0] }
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.messageText = "The agent is asking:"
@@ -147,7 +177,15 @@ final class MCPBridge {
     }
 }
 
+/// A tool-level failure with a message shown to the agent.
+struct MCPToolFailure: LocalizedError {
+    let message: String
+    init(_ message: String) { self.message = message }
+    var errorDescription: String? { message }
+}
+
 private struct WeakWorkspace {
     weak var value: Workspace?
-    init(_ value: Workspace) { self.value = value }
+    let token: String
+    init(_ value: Workspace, token: String) { self.value = value; self.token = token }
 }

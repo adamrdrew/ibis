@@ -218,6 +218,7 @@ struct IbisCommands: Commands {
 
     private func runAgent() {
         guard let workspace, let command = settings.agentCommandLine else { return }
+        MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
     }
 

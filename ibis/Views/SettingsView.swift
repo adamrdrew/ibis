@@ -200,21 +200,7 @@ private struct MCPSettingsView: View {
                             if settings.mcpEnabled { MCPService.restart(settings: settings) }
                         }
 
-                    LabeledContent("Token") {
-                        HStack {
-                            Text(settings.mcpToken)
-                                .font(.caption.monospaced())
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Button("Regenerate") {
-                                settings.mcpToken = AppSettings.freshToken()
-                                if settings.mcpEnabled { MCPService.restart(settings: settings) }
-                            }
-                        }
-                    }
-
-                    Text("Lets your agent drive and read this editor. Bound to localhost only; the token above authorizes clients.")
+                    Text("Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
@@ -228,7 +214,7 @@ private struct MCPSettingsView: View {
                 Button("Add Ibis to \(settings.agentKind.displayName) Config") {
                     writeConfig()
                 }
-                .disabled(MCPBridge.shared.activeWorkspace == nil)
+                .disabled(MCPBridge.shared.frontmostWorkspace == nil)
 
                 if let status {
                     Text(status)
@@ -245,7 +231,7 @@ private struct MCPSettingsView: View {
     }
 
     private func writeConfig() {
-        guard let root = MCPBridge.shared.activeWorkspace?.rootURL else {
+        guard let workspace = MCPBridge.shared.frontmostWorkspace else {
             status = "Open a project window first."
             isError = true
             return
@@ -254,9 +240,9 @@ private struct MCPSettingsView: View {
         do {
             let result = try MCPConfigWriter.write(
                 agent: settings.agentKind,
-                projectRoot: root,
+                projectRoot: workspace.rootURL,
                 port: port,
-                token: settings.mcpToken
+                token: MCPBridge.shared.token(for: workspace)
             )
             status = result.message
             isError = false

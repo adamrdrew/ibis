@@ -33,6 +33,10 @@ final class Workspace {
     /// dependency cycle, and no view needs to react to it.
     @ObservationIgnored weak var window: NSWindow?
 
+    /// The editor in this window that most recently had focus, so the MCP
+    /// `get_selection` tool reads the selection from the right window.
+    @ObservationIgnored weak var focusedEditor: NSTextView?
+
     /// True while a window-close save sheet is up, to avoid presenting a second.
     @ObservationIgnored private var isPresentingCloseSheet = false
 

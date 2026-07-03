@@ -31,13 +31,15 @@ struct WorkspaceView: View {
         }
         // Transient banner posted by the MCP `notify` tool.
         .overlay(alignment: .top) {
-            if let banner = bridge.banner {
+            if let banner = bridge.banner, let workspace,
+               bridge.bannerToken == bridge.token(for: workspace) {
                 MCPBannerView(text: banner)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .task(id: banner) {
                         try? await Task.sleep(for: .seconds(4))
                         bridge.banner = nil
+                        bridge.bannerToken = nil
                     }
             }
         }
@@ -158,6 +160,7 @@ struct WorkspaceView: View {
             // re-launch the agent because they aren't in the pending set).
             if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL),
                let command = settings.agentCommandLine {
+                MCPService.bindAgent(to: workspace, settings: settings)
                 workspace.runAgent(command: command, name: settings.agentName)
             }
         }
@@ -247,6 +250,7 @@ struct WorkspaceView: View {
     /// Launches the configured agent in a new terminal, revealing the dock.
     private func openAgent() {
         guard let workspace, let command = settings.agentCommandLine else { return }
+        MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
     }
 

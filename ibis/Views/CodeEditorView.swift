@@ -428,8 +428,9 @@ final class EditorTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         onActivate?()
-        // Remember the focused editor so the MCP `get_selection` tool can read it.
-        MCPBridge.shared.activeTextView = self
+        // Attribute focus to this editor's window so the MCP `get_selection`
+        // tool reads the selection from the correct project window.
+        if let window { MCPBridge.shared.noteFocusedEditor(self, in: window) }
         return super.becomeFirstResponder()
     }
 
