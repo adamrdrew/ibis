@@ -28,10 +28,19 @@ final class Workspace {
     var onDirectoryReloaded: ((FileNode) -> Void)?
 
     /// The hosting window, so unsaved-changes confirmations can attach as sheets.
-    weak var window: NSWindow?
+    /// `@ObservationIgnored` because it's assigned from a view-backing
+    /// representable during the update pass; observing it would risk a
+    /// dependency cycle, and no view needs to react to it.
+    @ObservationIgnored weak var window: NSWindow?
 
     /// True while a window-close save sheet is up, to avoid presenting a second.
-    private var isPresentingCloseSheet = false
+    @ObservationIgnored private var isPresentingCloseSheet = false
+
+    /// Whether the opened folder is empty (loaded, no visible children). Updated
+    /// only outside the file browser's layout pass — never a live read of
+    /// `rootNode.children`, which the outline view mutates *during* layout and
+    /// would form a fatal dependency cycle with the sidebar's empty-state hint.
+    private(set) var rootIsEmpty = false
 
     init(rootURL: URL, isDirectory: Bool) {
         self.rootURL = rootURL
@@ -65,6 +74,7 @@ final class Workspace {
         if let node = loadedDirectoryNode(matching: url.standardizedFileURL) {
             await node.reloadChildrenMerging()
             onDirectoryReloaded?(node)
+            if node === rootNode { refreshRootEmptiness() }
         }
     }
 
@@ -82,6 +92,7 @@ final class Workspace {
             reloaded.insert(directory)
             await node.reloadChildrenMerging()
             onDirectoryReloaded?(node)
+            if node === rootNode { refreshRootEmptiness() }
         }
     }
 
@@ -105,10 +116,11 @@ final class Workspace {
         rootURL.lastPathComponent
     }
 
-    /// True when the opened folder has loaded and, after filtering, contains no
-    /// visible children — so the sidebar can show a hint instead of a blank void.
-    var rootIsEmpty: Bool {
-        isDirectory && rootNode.isLoaded && (rootNode.children?.isEmpty ?? false)
+    /// Recomputes `rootIsEmpty` from the (already-loaded) root children. Call
+    /// only from outside the outline view's layout — after an async load or a
+    /// filesystem reload — so it never races the outline's in-layout child load.
+    func refreshRootEmptiness() {
+        rootIsEmpty = isDirectory && rootNode.isLoaded && (rootNode.children?.isEmpty ?? false)
     }
 
     /// Returns the cached document for a URL, creating (but not yet loading) one

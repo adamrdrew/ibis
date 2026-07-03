@@ -37,8 +37,12 @@ struct WorkspaceView: View {
         } detail: {
             detail
         }
-        .toolbar(id: "workspace") {
-            ToolbarItem(id: "search", placement: .primaryAction) {
+        // NOTE: a customizable `.toolbar(id:)` crashes here — inside a
+        // NavigationSplitView, SwiftUI inserts its automatic sidebar-toggle item
+        // twice ("already contains an item with identifier …toggleSidebar").
+        // So this stays a plain, non-customizable ToolbarItemGroup.
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     sidebarMode = .search
                 } label: {
@@ -46,9 +50,7 @@ struct WorkspaceView: View {
                 }
                 .disabled(workspace == nil)
                 .help("Search in Folder (⇧⌘F)")
-            }
 
-            ToolbarItem(id: "split", placement: .primaryAction) {
                 Button {
                     workspace?.layout.splitActive()
                 } label: {
@@ -56,9 +58,7 @@ struct WorkspaceView: View {
                 }
                 .disabled(activeDocument == nil)
                 .help("Split Editor (⌘\\)")
-            }
 
-            ToolbarItem(id: "save", placement: .primaryAction) {
                 Button {
                     if let document = activeDocument {
                         Task { await document.save() }
@@ -68,9 +68,7 @@ struct WorkspaceView: View {
                 }
                 .disabled(activeDocument?.isDirty != true)
                 .help("Save (⌘S)")
-            }
 
-            ToolbarItem(id: "terminal", placement: .primaryAction) {
                 Button {
                     workspace?.toggleTerminal()
                 } label: {
@@ -78,9 +76,7 @@ struct WorkspaceView: View {
                 }
                 .disabled(workspace == nil)
                 .help("Show or Hide Terminal (⌃`)")
-            }
 
-            ToolbarItem(id: "agent", placement: .primaryAction) {
                 Button(action: openAgent) {
                     Label("Open in \(settings.agentName)", systemImage: "sparkles")
                 }
@@ -131,6 +127,7 @@ struct WorkspaceView: View {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
             await workspace.rootNode.loadChildren()
+            workspace.refreshRootEmptiness()
             if ref.isDirectory {
                 // Reopen the tabs/panes/selection from the last session.
                 await workspace.restorePersistedLayout()
