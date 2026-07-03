@@ -8,6 +8,9 @@ let workspaceWindowID = "workspace"
 /// Identifier for the singleton Welcome / launcher window.
 let welcomeWindowID = "welcome"
 
+/// Identifier for the Keyboard Shortcuts help window.
+let shortcutsWindowID = "shortcuts-help"
+
 /// The app's menu bar: File / View / Editor commands wired to the focused
 /// window's `Workspace` (via `@FocusedValue`) and to the shared `AppSettings`.
 /// Standard Edit (undo/cut/copy/paste), Find, and Sidebar commands come from
@@ -84,6 +87,12 @@ struct IbisCommands: Commands {
 
         // Show/Hide Sidebar.
         SidebarCommands()
+
+        // MARK: Help
+        CommandGroup(replacing: .help) {
+            Button("Keyboard Shortcuts") { openWindow(id: shortcutsWindowID) }
+                .keyboardShortcut("/", modifiers: [.command, .shift])
+        }
 
         // MARK: View additions
         CommandGroup(after: .toolbar) {

@@ -31,6 +31,13 @@ struct IbisApp: App {
             IbisCommands(settings: settings)
         }
 
+        // A discoverable reference for Ibis's keyboard shortcuts (Help menu).
+        Window("Keyboard Shortcuts", id: shortcutsWindowID) {
+            ShortcutsHelpView()
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+
         Settings {
             SettingsView()
                 .environment(settings)
