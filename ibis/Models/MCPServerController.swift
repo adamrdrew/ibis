@@ -21,6 +21,13 @@ final class IbisMCPServer {
         try await MCPBridge.shared.openFile(token: await projectToken(), path: path, line: line)
     }
 
+    /// Reveal a file in this agent's file browser (expand to it and select it).
+    /// The path may be absolute or relative to the workspace root.
+    @MCPTool(name: "reveal_in_tree")
+    func revealInTree(path: String) async throws -> String {
+        try await MCPBridge.shared.revealInTree(token: await projectToken(), path: path)
+    }
+
     /// The path of the file currently focused in this agent's Ibis window.
     @MCPTool(name: "get_active_file", readOnlyHint: true)
     func getActiveFile() async throws -> String {

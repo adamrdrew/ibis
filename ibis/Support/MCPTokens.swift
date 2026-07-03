@@ -8,13 +8,22 @@ enum MCPTokenStore {
     private static let key = "mcp.projectTokens.v1"
 
     static func token(for root: URL) -> String {
-        let path = root.standardizedFileURL.path(percentEncoded: false)
+        let path = canonicalPath(root)
         var map = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
         if let existing = map[path] { return existing }
         let token = AppSettings.freshToken()
         map[path] = token
         UserDefaults.standard.set(map, forKey: key)
         return token
+    }
+
+    /// A stable key for a root: symlinks resolved (so `/tmp` and `/private/tmp`
+    /// agree) and no trailing slash, so a folder maps to one token however its
+    /// path was expressed.
+    private static func canonicalPath(_ root: URL) -> String {
+        var path = root.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
     }
 }
 

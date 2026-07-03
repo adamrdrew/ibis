@@ -88,6 +88,38 @@ struct FileOutlineView: NSViewRepresentable {
                     outlineView.reloadItem(node, reloadChildren: true)
                 }
             }
+            workspace.onRevealInTree = { [weak self] url in
+                self?.revealInTree(url)
+            }
+        }
+
+        /// Expands the folder chain down to `url` and selects its row (MCP
+        /// `reveal_in_tree`). Selecting a file also opens it, matching a click.
+        func revealInTree(_ url: URL) {
+            guard let outlineView else { return }
+            let root = workspace.rootNode
+            let rootPath = root.url.resolvingSymlinksInPath().standardizedFileURL.path
+            let targetPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard targetPath == rootPath || targetPath.hasPrefix(rootPath + "/") else { return }
+
+            var node = root
+            let rest = targetPath.dropFirst(rootPath.count)
+                .split(separator: "/").map(String.init)
+            for (index, component) in rest.enumerated() {
+                node.loadChildrenSyncIfNeeded()
+                guard let child = node.children?.first(where: { $0.url.lastPathComponent == component }) else {
+                    break
+                }
+                node = child
+                // Expand every intermediate directory so the target row exists.
+                if index < rest.count - 1, child.isDirectory {
+                    outlineView.expandItem(child)
+                }
+            }
+            let row = outlineView.row(forItem: node)
+            guard row >= 0 else { return }
+            outlineView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            outlineView.scrollRowToVisible(row)
         }
 
         // MARK: Data source

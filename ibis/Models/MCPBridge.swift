@@ -111,6 +111,16 @@ final class MCPBridge {
         return "Opened \(url.lastPathComponent) in Ibis."
     }
 
+    func revealInTree(token: String?, path: String) throws -> String {
+        let workspace = try workspace(for: token)
+        let url = resolve(path, in: workspace)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw MCPToolFailure("There's no file at \(url.path).")
+        }
+        workspace.requestRevealInTree(url)
+        return "Revealed \(url.lastPathComponent) in the file browser."
+    }
+
     func activeFilePath(token: String?) throws -> String {
         let workspace = try workspace(for: token)
         return workspace.activeDocument?.url?.path ?? "(no file open)"

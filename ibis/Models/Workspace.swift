@@ -27,6 +27,13 @@ final class Workspace {
     /// or our own operations) so the outline view can refresh that item.
     var onDirectoryReloaded: ((FileNode) -> Void)?
 
+    /// Asks the file browser to expand to and select a URL (MCP `reveal_in_tree`).
+    var onRevealInTree: ((URL) -> Void)?
+
+    func requestRevealInTree(_ url: URL) {
+        onRevealInTree?(url)
+    }
+
     /// The hosting window, so unsaved-changes confirmations can attach as sheets.
     /// `@ObservationIgnored` because it's assigned from a view-backing
     /// representable during the update pass; observing it would risk a
