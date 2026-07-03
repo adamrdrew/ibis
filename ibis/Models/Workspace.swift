@@ -27,6 +27,12 @@ final class Workspace {
     /// or our own operations) so the outline view can refresh that item.
     var onDirectoryReloaded: ((FileNode) -> Void)?
 
+    /// The hosting window, so unsaved-changes confirmations can attach as sheets.
+    weak var window: NSWindow?
+
+    /// True while a window-close save sheet is up, to avoid presenting a second.
+    private var isPresentingCloseSheet = false
+
     init(rootURL: URL, isDirectory: Bool) {
         self.rootURL = rootURL
         self.isDirectory = isDirectory
@@ -166,32 +172,37 @@ final class Workspace {
         requestCloseTab(document, in: pane)
     }
 
-    /// Closes a tab, prompting to save first if the document has unsaved changes
-    /// and isn't still open in another pane.
+    /// Closes a tab, prompting to save first (in a window-attached sheet) if the
+    /// document has unsaved changes and isn't still open in another pane.
     func requestCloseTab(_ document: OpenDocument, in pane: EditorPane) {
         guard pane.tabDocuments.contains(where: { $0.id == document.id }) else { return }
 
-        if document.isDirty && !isOpenElsewhere(document, excluding: pane) {
-            switch confirmSave(
-                message: "Do you want to save the changes you made to “\(document.name)”?",
-                informative: "Your changes will be lost if you don’t save them."
-            ) {
-            case .cancel:
-                return
-            case .discard:
-                discardDocument(document)
-            case .save:
+        guard document.isDirty && !isOpenElsewhere(document, excluding: pane),
+              let window = window ?? NSApp.keyWindow else {
+            closeTab(document, in: pane)
+            return
+        }
+
+        let alert = makeSaveAlert(
+            message: "Do you want to save the changes you made to “\(document.name)”?",
+            informative: "Your changes will be lost if you don’t save them."
+        )
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            switch response {
+            case .alertFirstButtonReturn: // Save
                 if document.isUntitled {
-                    if saveAs(document) { closeTab(document, in: pane) }
+                    if self.saveAs(document) { self.closeTab(document, in: pane) }
                 } else {
-                    Task {
-                        if await document.save() { self.closeTab(document, in: pane) }
-                    }
+                    Task { if await document.save() { self.closeTab(document, in: pane) } }
                 }
-                return
+            case .alertThirdButtonReturn: // Don't Save
+                self.discardDocument(document)
+                self.closeTab(document, in: pane)
+            default: // Cancel
+                break
             }
         }
-        closeTab(document, in: pane)
     }
 
     private func closeTab(_ document: OpenDocument, in pane: EditorPane) {
@@ -262,8 +273,6 @@ final class Workspace {
 
     // MARK: - Unsaved changes
 
-    private enum SaveDecision { case save, discard, cancel }
-
     /// Distinct documents with unsaved edits that are currently open in a tab.
     var dirtyDocuments: [OpenDocument] {
         var seen = Set<OpenDocument.ID>()
@@ -277,44 +286,58 @@ final class Workspace {
         return result
     }
 
-    /// Called from the window's close guard: prompts if there are unsaved
-    /// changes and returns whether the window may close.
-    func confirmWindowClose() -> Bool {
+    /// Called from the window's close guard. Returns `true` if the window may
+    /// close immediately (no unsaved changes). Returns `false` if we've taken
+    /// over: either presenting a save sheet that will call `proceed()` once the
+    /// user resolves it, or (re-entrantly) declining to prompt twice.
+    func requestWindowClose(proceed: @escaping () -> Void) -> Bool {
         let dirty = dirtyDocuments
         guard !dirty.isEmpty else { return true }
+        guard !isPresentingCloseSheet, let window = window ?? NSApp.keyWindow else { return false }
 
+        isPresentingCloseSheet = true
         let message = dirty.count == 1
             ? "Do you want to save the changes you made to “\(dirty[0].name)”?"
             : "You have \(dirty.count) documents with unsaved changes."
-        switch confirmSave(message: message, informative: "Your changes will be lost if you don’t save them.") {
-        case .cancel:
-            return false
-        case .discard:
-            return true
-        case .save:
-            for document in dirty {
-                if document.isUntitled {
-                    _ = saveAs(document)
-                } else {
-                    document.saveSynchronously()
+        let alert = makeSaveAlert(message: message, informative: "Your changes will be lost if you don’t save them.")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.isPresentingCloseSheet = false
+            switch response {
+            case .alertFirstButtonReturn: // Save
+                Task { @MainActor in
+                    await self.saveAllForClose(dirty)
+                    proceed()
                 }
+            case .alertThirdButtonReturn: // Don't Save
+                proceed()
+            default: // Cancel
+                break
             }
-            return true
+        }
+        return false
+    }
+
+    /// Saves every dirty document before the window closes, routing untitled
+    /// buffers through a Save panel.
+    private func saveAllForClose(_ dirty: [OpenDocument]) async {
+        for document in dirty {
+            if document.isUntitled {
+                _ = saveAs(document)
+            } else {
+                await document.save()
+            }
         }
     }
 
-    /// Shows the standard Save / Cancel / Don't Save sheet-style alert.
-    private func confirmSave(message: String, informative: String) -> SaveDecision {
+    /// Builds the standard Save / Cancel / Don't Save alert.
+    private func makeSaveAlert(message: String, informative: String) -> NSAlert {
         let alert = NSAlert()
         alert.messageText = message
         alert.informativeText = informative
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Don’t Save")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: return .save
-        case .alertThirdButtonReturn: return .discard
-        default: return .cancel
-        }
+        return alert
     }
 }

@@ -88,14 +88,15 @@ struct WorkspaceView: View {
                 .disabled(activeDocument == nil)
                 .hidden()
         }
-        // Confirm unsaved changes before the window closes.
+        // Confirm unsaved changes before the window closes (as a sheet).
         .background {
-            WindowCloseGuard { workspace?.confirmWindowClose() ?? true }
+            WindowCloseGuard { proceed in workspace?.requestWindowClose(proceed: proceed) ?? true }
         }
-        // Mirror the active document's dirty state into the window's close-button
-        // dot. Re-evaluates whenever the observed dirty flag / active tab changes.
+        // Give the workspace its window (for sheet-attached confirmations) and
+        // mirror the active document's dirty state into the close-button dot.
+        // Re-evaluates whenever the observed dirty flag / active tab changes.
         .background {
-            WindowEditedIndicator(edited: activeDocument?.isDirty ?? false)
+            WindowBridge(workspace: workspace, edited: activeDocument?.isDirty ?? false)
         }
         // Expose the frontmost window's workspace and sidebar mode to the menu
         // bar. Scene-scoped (not focus-scoped) so commands like Show Terminal
@@ -274,17 +275,22 @@ struct WorkspaceView: View {
     }
 }
 
-/// Mirrors a document's dirty state into the hosting `NSWindow`'s
-/// `isDocumentEdited`, which draws the dot in the red close button.
-private struct WindowEditedIndicator: NSViewRepresentable {
+/// Bridges the hosting `NSWindow` to the workspace: hands the window to the
+/// model (so unsaved-changes confirmations can attach as sheets) and mirrors the
+/// active document's dirty state into `isDocumentEdited` (the close-button dot).
+private struct WindowBridge: NSViewRepresentable {
+    var workspace: Workspace?
     var edited: Bool
 
     func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
 
     func updateNSView(_ nsView: NSView, context: Context) {
+        let workspace = workspace
         let edited = edited
         DispatchQueue.main.async {
-            nsView.window?.isDocumentEdited = edited
+            let window = nsView.window
+            workspace?.window = window
+            window?.isDocumentEdited = edited
         }
     }
 }

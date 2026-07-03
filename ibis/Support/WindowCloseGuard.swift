@@ -2,11 +2,16 @@ import SwiftUI
 import AppKit
 
 /// Installs an `NSWindowDelegate` on the hosting window that can veto closing
-/// (via `shouldClose`) — e.g. to confirm unsaved changes. All other delegate
-/// methods are forwarded to SwiftUI's own window delegate so scene management
-/// keeps working.
+/// (via `shouldClose`) — e.g. to confirm unsaved changes with a sheet. All other
+/// delegate methods are forwarded to SwiftUI's own window delegate so scene
+/// management keeps working.
+///
+/// `shouldClose` returns `true` to allow an immediate close. It may instead
+/// return `false` and later invoke the supplied `proceed` closure once an async
+/// decision (a save sheet) resolves; `proceed` re-issues the close, which the
+/// guard then lets through.
 struct WindowCloseGuard: NSViewRepresentable {
-    let shouldClose: () -> Bool
+    let shouldClose: (_ proceed: @escaping () -> Void) -> Bool
 
     func makeCoordinator() -> Proxy { Proxy(shouldClose: shouldClose) }
 
@@ -24,10 +29,13 @@ struct WindowCloseGuard: NSViewRepresentable {
     }
 
     final class Proxy: NSObject, NSWindowDelegate {
-        var shouldClose: () -> Bool
+        var shouldClose: (_ proceed: @escaping () -> Void) -> Bool
         private weak var next: NSWindowDelegate?
+        /// Set once an async decision has approved the close, so the re-issued
+        /// close passes straight through.
+        private var closeApproved = false
 
-        init(shouldClose: @escaping () -> Bool) {
+        init(shouldClose: @escaping (_ proceed: @escaping () -> Void) -> Bool) {
             self.shouldClose = shouldClose
         }
 
@@ -40,7 +48,17 @@ struct WindowCloseGuard: NSViewRepresentable {
         }
 
         func windowShouldClose(_ sender: NSWindow) -> Bool {
-            guard shouldClose() else { return false }
+            if closeApproved { return forwardShouldClose(sender) }
+            let allow = shouldClose { [weak self, weak sender] in
+                guard let self, let sender else { return }
+                self.closeApproved = true
+                sender.performClose(nil)
+            }
+            guard allow else { return false }
+            return forwardShouldClose(sender)
+        }
+
+        private func forwardShouldClose(_ sender: NSWindow) -> Bool {
             if let next, next.responds(to: #selector(windowShouldClose(_:))) {
                 return next.windowShouldClose?(sender) ?? true
             }
