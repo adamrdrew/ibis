@@ -58,6 +58,9 @@ struct IbisCommands: Commands {
                 .keyboardShortcut("s", modifiers: [.command, .shift])
                 .disabled(workspace?.activeDocument == nil)
 
+            Button("Revert to Saved") { workspace?.revertActiveDocument() }
+                .disabled(!(workspace?.activeDocument.map { $0.isDirty && $0.url != nil } ?? false))
+
             Divider()
 
             Button("Reveal in Finder") { workspace?.revealActiveInFinder() }

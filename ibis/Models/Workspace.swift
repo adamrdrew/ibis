@@ -403,6 +403,23 @@ final class Workspace {
         pane.selectedID = pane.tabDocuments[next].id
     }
 
+    /// Reverts the active document to its saved contents, after a sheet
+    /// confirmation.
+    func revertActiveDocument() {
+        guard let document = activeDocument, document.isDirty, document.url != nil,
+              let window = window ?? NSApp.keyWindow else { return }
+        let alert = NSAlert()
+        alert.messageText = "Do you want to revert to the last saved version of “\(document.name)”?"
+        alert.informativeText = "Your current changes will be lost."
+        alert.addButton(withTitle: "Revert")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { response in
+            if response == .alertFirstButtonReturn {
+                Task { await document.revertToSaved() }
+            }
+        }
+    }
+
     func revealActiveInFinder() {
         guard let url = activeDocument?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])

@@ -82,6 +82,26 @@ final class OpenDocument: Identifiable {
         return succeeded
     }
 
+    /// Re-reads the file from disk, discarding unsaved edits. No-op for an
+    /// untitled or clean document. Uses the same read path as the initial load.
+    func revertToSaved() async {
+        guard let fileURL = url, isDirty else { return }
+        let outcome = await Task.detached(priority: .userInitiated) {
+            OpenDocument.read(fileURL)
+        }.value
+        switch outcome {
+        case .text(let string):
+            text = string
+            isBinary = false
+            loadError = nil
+        case .binary:
+            isBinary = true
+        case .failure(let message):
+            loadError = message
+        }
+        isDirty = false
+    }
+
     // MARK: - Reading
 
     private enum ReadOutcome: Sendable {
