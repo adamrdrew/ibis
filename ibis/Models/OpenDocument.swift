@@ -21,38 +21,66 @@ final class OpenDocument: Identifiable {
     /// (used when opening a file from search results). Cleared once applied.
     var pendingSelection: NSRange?
 
-    var name: String { url?.lastPathComponent ?? "Untitled" }
+    /// A tab title for documents with no file (ephemeral, agent-created content).
+    private var displayTitle: String?
+
+    var name: String { url?.lastPathComponent ?? displayTitle ?? "Untitled" }
     var isUntitled: Bool { url == nil }
 
-    /// Extensions Ibis can show as a rendered preview.
-    static let renderableExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "html", "htm"]
+    /// How the document is presented: editable source, or a rendered preview.
+    /// For files it's derived from the extension; for ephemeral content the
+    /// agent declares it.
+    enum Format { case source, markdown, html }
+    var format: Format
 
-    /// Whether this file can be shown as a rendered preview (Markdown / HTML).
-    var isRenderable: Bool {
-        guard let ext = url?.pathExtension.lowercased() else { return false }
-        return Self.renderableExtensions.contains(ext)
-    }
+    /// Whether this document can be shown as a rendered preview (Markdown / HTML).
+    var isRenderable: Bool { format != .source }
 
     /// Whether the editor shows the rendered preview (vs. raw source). Renderable
-    /// files (READMEs, docs, reports) open in preview; toggled in the pane header.
+    /// documents open in preview; toggled in the pane header.
     var showsPreview: Bool = false
 
     init(url: URL) {
         self.url = url
-        showsPreview = Self.renderableExtensions.contains(url.pathExtension.lowercased())
+        self.format = Self.format(forExtension: url.pathExtension)
+        self.showsPreview = format != .source
     }
 
     /// A new, empty, untitled buffer. Nothing to read from disk, so it's already
     /// "loaded"; it starts clean and only goes dirty once the user types.
     init() {
         self.url = nil
+        self.format = .source
         self.isLoaded = true
     }
 
+    /// An ephemeral, in-memory tab holding agent-supplied content (no file).
+    /// Renders per `format`; never nags to save unless the human edits it.
+    init(title: String, text: String, format: Format) {
+        self.url = nil
+        self.displayTitle = title
+        self.text = text
+        self.format = format
+        self.isLoaded = true
+        self.showsPreview = format != .source
+    }
+
+    /// Extensions Ibis renders as previews.
+    static func format(forExtension ext: String) -> Format {
+        switch ext.lowercased() {
+        case "md", "markdown", "mdown", "mkd": .markdown
+        case "html", "htm": .html
+        default: .source
+        }
+    }
+
     /// Assigns a URL in place (used by Save As), keeping the same identity so the
-    /// document's tab and editor view are preserved rather than reopened.
+    /// document's tab and editor view are preserved rather than reopened. Updates
+    /// the render format to match the chosen extension.
     func assignURL(_ newURL: URL) {
         url = newURL
+        displayTitle = nil
+        format = Self.format(forExtension: newURL.pathExtension)
     }
 
     func loadIfNeeded() async {

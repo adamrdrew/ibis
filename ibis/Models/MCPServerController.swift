@@ -30,6 +30,15 @@ final class IbisMCPServer {
         try await MCPBridge.shared.proposeEdit(token: await projectToken(), path: path, newContent: newContent)
     }
 
+    /// Open content in a new, unsaved tab (no file is created). Use this to show
+    /// the human a report, summary, or draft. `format` is "markdown", "html", or
+    /// "text"; Markdown and HTML render, "text" shows editable source. If omitted,
+    /// the format is inferred. The human can edit and Save As to keep it.
+    @MCPTool(name: "open_content")
+    func openContent(title: String, content: String, format: String? = nil) async throws -> String {
+        try await MCPBridge.shared.openContent(token: await projectToken(), title: title, content: content, format: format)
+    }
+
     /// Propose one or more find-and-replace edits to a file and wait for the
     /// human to review the resulting diff. Prefer this over open_file+propose_edit
     /// for small or surgical changes — it keeps corrections cheap and still routes

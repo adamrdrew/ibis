@@ -186,6 +186,35 @@ final class MCPBridge {
         return "The human declined the changes to \(url.lastPathComponent)."
     }
 
+    /// Opens agent-supplied content in a new, unsaved tab (no file). `format` is
+    /// "markdown", "html", or "text"; when omitted it's inferred (HTML if the
+    /// content looks like HTML, else Markdown).
+    func openContent(token: String?, title: String, content: String, format: String?) throws -> String {
+        let workspace = try workspace(for: token)
+        let resolved = resolveFormat(format, content: content)
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled" : title
+        let document = OpenDocument(title: name, text: content, format: resolved)
+        workspace.layout.activePane?.open(document)
+        return "Opened “\(name)” in a new tab."
+    }
+
+    private func resolveFormat(_ format: String?, content: String) -> OpenDocument.Format {
+        switch format?.lowercased() {
+        case "markdown", "md": return .markdown
+        case "html", "htm": return .html
+        case "text", "plain", "source": return .source
+        case .some(let other) where !other.isEmpty:
+            return .markdown // unknown explicit value → safest renderable default
+        default:
+            // Inferred fallback: only call it HTML on a strong signal.
+            let head = content.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200).lowercased()
+            if head.hasPrefix("<!doctype html") || head.hasPrefix("<html") || head.contains("<body") {
+                return .html
+            }
+            return .markdown
+        }
+    }
+
     func revealInTree(token: String?, path: String) throws -> String {
         let workspace = try workspace(for: token)
         let url = resolve(path, in: workspace)

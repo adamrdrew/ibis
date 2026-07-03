@@ -6,11 +6,13 @@ import WebKit
 /// relative assets (CSS, images, chart data) resolve. Re-renders when the
 /// content changes (e.g. the agent regenerates a report).
 struct PreviewView: NSViewRepresentable {
-    /// The document's current text (drives re-render for Markdown; a change
-    /// signal for HTML, which is loaded from disk).
+    /// The document's current text (drives re-render for Markdown / ephemeral
+    /// HTML; a change signal for on-disk HTML, which is loaded from disk).
     let text: String
-    let fileURL: URL
-    /// The workspace root, so an HTML report can read project-relative assets.
+    let isHTML: Bool
+    /// The backing file, if any. Ephemeral (agent-created) content has none.
+    let fileURL: URL?
+    /// The workspace root, so an on-disk HTML report can read relative assets.
     let accessRoot: URL
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -28,16 +30,20 @@ struct PreviewView: NSViewRepresentable {
 
     private func render(in webView: WKWebView, coordinator: Coordinator) {
         // Skip redundant reloads (updateNSView fires for unrelated reasons too).
-        let signature = fileURL.path + "\u{1}" + text
+        let signature = (fileURL?.path ?? "ephemeral") + "\u{1}" + (isHTML ? "h" : "m") + "\u{1}" + text
         guard coordinator.lastSignature != signature else { return }
         coordinator.lastSignature = signature
 
-        let ext = fileURL.pathExtension.lowercased()
-        if ext == "html" || ext == "htm" {
-            webView.loadFileURL(fileURL, allowingReadAccessTo: accessRoot)
+        if isHTML {
+            if let fileURL {
+                // On-disk HTML: load from disk so relative assets resolve.
+                webView.loadFileURL(fileURL, allowingReadAccessTo: accessRoot)
+            } else {
+                webView.loadHTMLString(text, baseURL: nil)
+            }
         } else {
             let html = MarkdownRenderer.html(forMarkdown: text)
-            webView.loadHTMLString(html, baseURL: fileURL.deletingLastPathComponent())
+            webView.loadHTMLString(html, baseURL: fileURL?.deletingLastPathComponent())
         }
     }
 

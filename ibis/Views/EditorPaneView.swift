@@ -107,9 +107,14 @@ struct EditorPaneView: View {
                     systemImage: "exclamationmark.triangle",
                     description: Text(error)
                 )
-            } else if document.isRenderable, document.showsPreview, let url = document.url {
-                PreviewView(text: document.text, fileURL: url, accessRoot: workspace.rootURL)
-                    .id(document.id)
+            } else if document.isRenderable, document.showsPreview {
+                PreviewView(
+                    text: document.text,
+                    isHTML: document.format == .html,
+                    fileURL: document.url,
+                    accessRoot: workspace.rootURL
+                )
+                .id(document.id)
             } else {
                 CodeEditorView(
                     document: document,
