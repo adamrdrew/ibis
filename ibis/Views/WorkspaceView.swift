@@ -73,9 +73,11 @@ struct WorkspaceView: View {
         // twice ("already contains an item with identifier …toggleSidebar").
         // So this stays a plain, non-customizable ToolbarItemGroup.
         .toolbar {
-            // Project action runner: pick an action and run it in the Run tab.
-            ToolbarItemGroup(placement: .navigation) {
-                if let workspace, !workspace.projectConfig.runnableActions.isEmpty {
+            // Project action runner — shown only when actions are configured.
+            // (The condition lives at the toolbar-content level, not inside a
+            // ToolbarItemGroup, where SwiftUI handles `if` unreliably.)
+            if let workspace, !workspace.projectConfig.runnableActions.isEmpty {
+                ToolbarItemGroup(placement: .navigation) {
                     Picker("Action", selection: $selectedActionName) {
                         ForEach(workspace.projectConfig.runnableActions) { action in
                             Text(action.name).tag(Optional(action.name))
@@ -92,7 +94,10 @@ struct WorkspaceView: View {
                     }
                     .help("Run the selected action")
                 }
+            }
 
+            // Project Settings — always available (to add actions / env).
+            ToolbarItem(placement: .navigation) {
                 Button {
                     workspace?.projectConfig.load()
                     workspace?.projectSettingsRequested = true

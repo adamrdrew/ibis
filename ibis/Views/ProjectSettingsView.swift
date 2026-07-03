@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// Editor for a project's `.ibis.json`: named actions (build / test / lint / …)
-/// and environment variables. Mutates the live `ProjectConfig`; saving writes
-/// the file (and keeps it out of git).
+/// and environment variables. Mutates the live `ProjectConfig`; Done saves the
+/// file (and keeps it out of git), Cancel reverts to the last saved version.
 struct ProjectSettingsView: View {
     @Bindable var config: ProjectConfig
     /// Persist the config and re-apply env. Called on Done.
@@ -10,79 +10,146 @@ struct ProjectSettingsView: View {
     var dismiss: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("Project Settings")
-                    .font(.headline)
-                Spacer()
-            }
-            .padding(12)
-            Divider()
-
+        NavigationStack {
             Form {
-                Section("Actions") {
-                    ForEach($config.actions) { $action in
-                        HStack(spacing: 8) {
-                            TextField("Name", text: $action.name)
-                                .frame(width: 130)
-                            TextField("Command", text: $action.command)
-                                .font(.system(.body, design: .monospaced))
-                            removeButton { config.actions.removeAll { $0.id == action.id } }
-                        }
-                    }
-                    Button {
-                        config.actions.append(ProjectConfig.Action())
-                    } label: {
-                        Label("Add Action", systemImage: "plus")
-                    }
-                }
-
-                Section("Environment Variables") {
-                    ForEach($config.envVars) { $variable in
-                        HStack(spacing: 8) {
-                            TextField("KEY", text: $variable.key)
-                                .frame(width: 180)
-                                .font(.system(.body, design: .monospaced))
-                            TextField("value", text: $variable.value)
-                                .font(.system(.body, design: .monospaced))
-                            removeButton { config.envVars.removeAll { $0.id == variable.id } }
-                        }
-                    }
-                    Button {
-                        config.envVars.append(ProjectConfig.EnvVar())
-                    } label: {
-                        Label("Add Variable", systemImage: "plus")
-                    }
-                }
-
-                Section {
-                    Text("Saved to .ibis.json in the project (added to .gitignore). Environment variables are injected into terminal and agent sessions opened afterward.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+                actionsSection
+                environmentSection
             }
             .formStyle(.grouped)
-
-            Divider()
-            HStack {
-                Spacer()
-                Button("Done") {
-                    commit()
-                    dismiss()
+            .navigationTitle("Project Settings")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        config.load() // revert unsaved edits to last saved
+                        dismiss()
+                    }
                 }
-                .keyboardShortcut(.defaultAction)
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        commit()
+                        dismiss()
+                    }
+                }
             }
-            .padding(12)
         }
-        .frame(width: 580, height: 560)
+        .frame(width: 560, height: 540)
     }
 
-    private func removeButton(_ action: @escaping () -> Void) -> some View {
-        Button(role: .destructive, action: action) {
-            Image(systemName: "minus.circle")
+    // MARK: - Actions
+
+    private var actionsSection: some View {
+        Section {
+            if config.actions.isEmpty {
+                emptyRow("No actions yet")
+            }
+            ForEach($config.actions) { $action in
+                ActionRow(action: $action) {
+                    config.actions.removeAll { $0.id == action.id }
+                }
+            }
+            addButton("Add Action") {
+                config.actions.append(ProjectConfig.Action())
+            }
+        } header: {
+            Text("Actions")
+        } footer: {
+            Text("Named commands you can run from the toolbar or the Project menu.")
+        }
+    }
+
+    // MARK: - Environment
+
+    private var environmentSection: some View {
+        Section {
+            if config.envVars.isEmpty {
+                emptyRow("No variables yet")
+            }
+            ForEach($config.envVars) { $variable in
+                EnvRow(variable: $variable) {
+                    config.envVars.removeAll { $0.id == variable.id }
+                }
+            }
+            addButton("Add Variable") {
+                config.envVars.append(ProjectConfig.EnvVar())
+            }
+        } header: {
+            Text("Environment Variables")
+        } footer: {
+            Text("Injected into terminal and agent sessions opened afterward. Saved in .ibis.json, which Ibis adds to .gitignore.")
+        }
+    }
+
+    // MARK: - Shared bits
+
+    private func emptyRow(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func addButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: "plus.circle.fill")
+                .foregroundStyle(Color.ibisKelly)
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(.secondary)
+    }
+}
+
+/// One action row: name + command, with a delete control revealed on hover.
+private struct ActionRow: View {
+    @Binding var action: ProjectConfig.Action
+    var onRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            TextField("name", text: $action.name)
+                .textFieldStyle(.plain)
+                .frame(width: 150)
+            Divider().frame(height: 16)
+            TextField("command", text: $action.command)
+                .textFieldStyle(.plain)
+                .font(.system(.body, design: .monospaced))
+            RemoveButton(action: onRemove)
+                .opacity(hovering ? 1 : 0)
+        }
+        .onHover { hovering = $0 }
+    }
+}
+
+/// One environment variable row: KEY + value, delete revealed on hover.
+private struct EnvRow: View {
+    @Binding var variable: ProjectConfig.EnvVar
+    var onRemove: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            TextField("KEY", text: $variable.key)
+                .textFieldStyle(.plain)
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 180)
+            Divider().frame(height: 16)
+            TextField("value", text: $variable.value)
+                .textFieldStyle(.plain)
+                .font(.system(.body, design: .monospaced))
+            RemoveButton(action: onRemove)
+                .opacity(hovering ? 1 : 0)
+        }
+        .onHover { hovering = $0 }
+    }
+}
+
+private struct RemoveButton: View {
+    var action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "minus.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Remove")
         .accessibilityLabel("Remove")
     }
 }
