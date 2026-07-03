@@ -103,13 +103,14 @@ private struct ActionRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             TextField("name", text: $action.name)
-                .textFieldStyle(.plain)
-                .frame(width: 150)
-            Divider().frame(height: 16)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                .frame(width: 130)
             TextField("command", text: $action.command)
-                .textFieldStyle(.plain)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
                 .font(.system(.body, design: .monospaced))
             RemoveButton(action: onRemove)
                 .opacity(hovering ? 1 : 0)
@@ -125,14 +126,15 @@ private struct EnvRow: View {
     @State private var hovering = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             TextField("KEY", text: $variable.key)
-                .textFieldStyle(.plain)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
                 .font(.system(.body, design: .monospaced))
-                .frame(width: 180)
-            Divider().frame(height: 16)
+                .frame(width: 160)
             TextField("value", text: $variable.value)
-                .textFieldStyle(.plain)
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
                 .font(.system(.body, design: .monospaced))
             RemoveButton(action: onRemove)
                 .opacity(hovering ? 1 : 0)
