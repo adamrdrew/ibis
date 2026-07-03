@@ -46,6 +46,11 @@ final class Workspace {
         }
 
         git.refresh()
+
+        // Record in the system's Recent Documents (File ▸ Open Recent + Dock
+        // menu). Every open path — menu, CLI, Finder, Services, intents — ends
+        // up here, so this is the one central place to note it.
+        NSDocumentController.shared.noteNewRecentDocumentURL(rootURL)
     }
 
     /// Immediately re-reads a directory node (if loaded), for snappy updates

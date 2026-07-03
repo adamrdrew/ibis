@@ -42,6 +42,8 @@ struct IbisCommands: Commands {
                 .keyboardShortcut("o")
             Button("Open Folder…") { open(choosingDirectories: true) }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+            openRecentMenu
         }
 
         CommandGroup(after: .newItem) {
@@ -149,6 +151,30 @@ struct IbisCommands: Commands {
                 settings.terminalPlacement = settings.terminalPlacement == .bottom ? .trailing : .bottom
             }
         }
+    }
+
+    // MARK: - Open Recent
+
+    /// The File ▸ Open Recent submenu, backed by the system's recent-documents
+    /// list. Commands bodies re-evaluate when the menu opens, so it stays fresh.
+    @ViewBuilder
+    private var openRecentMenu: some View {
+        let recents = NSDocumentController.shared.recentDocumentURLs
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        Menu("Open Recent") {
+            ForEach(recents, id: \.self) { url in
+                Button(url.lastPathComponent) {
+                    var isDirectory: ObjCBool = false
+                    FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                    openWindow(value: WorkspaceRef(url: url, isDirectory: isDirectory.boolValue))
+                }
+            }
+            if !recents.isEmpty {
+                Divider()
+                Button("Clear Menu") { NSDocumentController.shared.clearRecentDocuments(nil) }
+            }
+        }
+        .disabled(recents.isEmpty)
     }
 
     // MARK: - Helpers
