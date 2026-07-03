@@ -14,6 +14,9 @@ final class TerminalDock {
     /// Working directory new terminals open in (the workspace root).
     let workingDirectory: URL
 
+    /// Environment from the project's `.ibis.json`, merged into every session.
+    var projectEnv: [String: String] = [:]
+
     init(workingDirectory: URL) {
         self.workingDirectory = workingDirectory
     }
@@ -25,11 +28,37 @@ final class TerminalDock {
     /// Creates a new terminal tab rooted at the workspace and focuses it. Pass a
     /// `command` (and `title`) to run something specific, e.g. an agent.
     @discardableResult
-    func newSession(command: String? = nil, title: String? = nil) -> TerminalSession {
-        let session = TerminalSession(workingDirectory: workingDirectory, command: command, title: title)
+    func newSession(command: String? = nil, title: String? = nil, role: TerminalSession.Role = .shell) -> TerminalSession {
+        let session = TerminalSession(
+            workingDirectory: workingDirectory,
+            command: command,
+            title: title,
+            role: role,
+            extraEnvironment: projectEnv
+        )
         sessions.append(session)
         activeSessionID = session.id
         return session
+    }
+
+    /// Runs a project action in a single reusable "Run" tab (replacing whatever
+    /// it was running), so actions never spawn a pile of one-off terminals.
+    func runAction(name: String, command: String) {
+        if let session = sessions.first(where: { $0.role == .run }) {
+            session.run(command: command, title: name, extraEnvironment: projectEnv)
+            activeSessionID = session.id
+        } else {
+            let session = TerminalSession(
+                workingDirectory: workingDirectory,
+                command: command,
+                title: name,
+                role: .run,
+                extraEnvironment: projectEnv
+            )
+            sessions.append(session)
+            activeSessionID = session.id
+        }
+        isVisible = true
     }
 
     /// Closes a terminal tab, terminating its shell and selecting a neighbor.

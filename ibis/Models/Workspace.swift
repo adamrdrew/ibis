@@ -12,6 +12,10 @@ final class Workspace {
     let layout = EditorLayout()
     let terminal: TerminalDock
     let git: GitStatusModel
+    let projectConfig: ProjectConfig
+
+    /// Set by the Project Settings menu command to open the settings sheet.
+    var projectSettingsRequested = false
 
     /// Holds security-scoped access to the root open for the workspace's lifetime.
     private let access: SecurityScopedAccess
@@ -101,6 +105,8 @@ final class Workspace {
         let terminalRoot = isDirectory ? rootURL : rootURL.deletingLastPathComponent()
         self.terminal = TerminalDock(workingDirectory: terminalRoot)
         self.git = GitStatusModel(root: terminalRoot)
+        self.projectConfig = ProjectConfig(root: terminalRoot)
+        self.terminal.projectEnv = projectConfig.environment
 
         if isDirectory {
             watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
@@ -491,6 +497,20 @@ final class Workspace {
     func revealActiveInFinder() {
         guard let url = activeDocument?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Project actions
+
+    /// Runs a project action in the shared Run terminal tab (env refreshed).
+    func runProjectAction(_ action: ProjectConfig.Action) {
+        terminal.projectEnv = projectConfig.environment
+        terminal.runAction(name: action.name, command: action.command)
+    }
+
+    /// Re-applies project env to the dock after settings change (affects new
+    /// sessions; already-running shells keep their environment).
+    func applyProjectEnv() {
+        terminal.projectEnv = projectConfig.environment
     }
 
     // MARK: - Terminal actions

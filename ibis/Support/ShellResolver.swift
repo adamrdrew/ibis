@@ -24,11 +24,13 @@ enum ShellResolver {
 
     /// The environment to hand the shell, as `KEY=VALUE` strings: the current
     /// process environment with a proper `TERM` and a UTF-8 locale fallback.
-    static func environment() -> [String] {
+    static func environment(extra: [String: String] = [:]) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
         env["TERM_PROGRAM"] = "Ibis"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
+        // Project `.ibis.json` env overrides the inherited process environment.
+        for (key, value) in extra { env[key] = value }
         return env.map { "\($0.key)=\($0.value)" }
     }
 

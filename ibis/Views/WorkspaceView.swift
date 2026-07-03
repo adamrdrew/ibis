@@ -18,6 +18,7 @@ struct WorkspaceView: View {
     @State private var sidebarMode: SidebarMode = .files
     @State private var searchModel = ProjectSearchModel()
     @State private var goToLineText = ""
+    @State private var selectedActionName: String?
 
     @State private var bridge = MCPBridge.shared
 
@@ -44,6 +45,19 @@ struct WorkspaceView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: bridge.banner)
+        // Project Settings editor (.ibis.json).
+        .sheet(isPresented: projectSettingsPresented) {
+            if let workspace {
+                ProjectSettingsView(
+                    config: workspace.projectConfig,
+                    commit: {
+                        try? workspace.projectConfig.save()
+                        workspace.applyProjectEnv()
+                    },
+                    dismiss: { workspace.projectSettingsRequested = false }
+                )
+            }
+        }
     }
 
     private var splitView: some View {
@@ -59,6 +73,36 @@ struct WorkspaceView: View {
         // twice ("already contains an item with identifier …toggleSidebar").
         // So this stays a plain, non-customizable ToolbarItemGroup.
         .toolbar {
+            // Project action runner: pick an action and run it in the Run tab.
+            ToolbarItemGroup(placement: .navigation) {
+                if let workspace, !workspace.projectConfig.runnableActions.isEmpty {
+                    Picker("Action", selection: $selectedActionName) {
+                        ForEach(workspace.projectConfig.runnableActions) { action in
+                            Text(action.name).tag(Optional(action.name))
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(minWidth: 90)
+
+                    Button {
+                        runSelectedAction()
+                    } label: {
+                        Label("Run Action", systemImage: "play.fill")
+                    }
+                    .help("Run the selected action")
+                }
+
+                Button {
+                    workspace?.projectConfig.load()
+                    workspace?.projectSettingsRequested = true
+                } label: {
+                    Label("Project Settings", systemImage: "slider.horizontal.3")
+                }
+                .disabled(workspace == nil)
+                .help("Project Settings (actions & environment)")
+            }
+
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     sidebarMode = .search
@@ -277,6 +321,21 @@ struct WorkspaceView: View {
         guard let workspace, let command = MCPService.launchCommand(settings: settings) else { return }
         MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
+    }
+
+    /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
+    private func runSelectedAction() {
+        guard let workspace else { return }
+        let actions = workspace.projectConfig.runnableActions
+        let action = actions.first { $0.name == selectedActionName } ?? actions.first
+        if let action { workspace.runProjectAction(action) }
+    }
+
+    private var projectSettingsPresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.projectSettingsRequested ?? false },
+            set: { workspace?.projectSettingsRequested = $0 }
+        )
     }
 
     private var editorConfiguration: EditorConfiguration {

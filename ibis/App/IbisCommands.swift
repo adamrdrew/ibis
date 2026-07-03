@@ -152,6 +152,24 @@ struct IbisCommands: Commands {
                 .disabled(workspace == nil)
         }
 
+        // MARK: Project
+        CommandMenu("Project") {
+            if let workspace {
+                ForEach(workspace.projectConfig.runnableActions) { action in
+                    Button("Run \(action.name)") { workspace.runProjectAction(action) }
+                }
+                if !workspace.projectConfig.runnableActions.isEmpty {
+                    Divider()
+                }
+            }
+            Button("Project Settings…") {
+                workspace?.projectConfig.load()
+                workspace?.projectSettingsRequested = true
+            }
+            .keyboardShortcut(",", modifiers: [.command, .shift])
+            .disabled(workspace == nil)
+        }
+
         // MARK: Terminal
         CommandMenu("Terminal") {
             Button((workspace?.terminal.isVisible ?? false) ? "Hide Terminal" : "Show Terminal") {

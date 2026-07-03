@@ -9,14 +9,24 @@ import SwiftTerm
 @Observable
 @MainActor
 final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
+    /// What a session is for. The `run` session is a single reusable tab that
+    /// project actions execute in.
+    enum Role { case shell, agent, run }
+
     let id = UUID()
     let workingDirectory: URL
+    let role: Role
 
-    /// A specific command to run as a login shell (e.g. an agent), or nil for a
-    /// plain interactive shell.
-    let command: String?
+    /// A specific command to run as a login shell (e.g. an agent or a project
+    /// action), or nil for a plain interactive shell. Mutable so the reusable
+    /// `run` session can execute successive actions.
+    private(set) var command: String?
+    /// Extra environment (from the project's `.ibis.json`) merged into the shell.
+    var extraEnvironment: [String: String]
+    /// The shell override last used, so `run`/`restart` can reuse it.
+    @ObservationIgnored private var lastShellOverride: String?
     /// Fallback tab title (before/without a title escape sequence).
-    private let defaultTitle: String
+    private var defaultTitle: String
 
     /// Shown in the tab; updated live from the shell's title escape sequences.
     var title: String
@@ -29,11 +39,34 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// built lazily the first time the tab is shown.
     @ObservationIgnored private(set) var terminalView: LocalProcessTerminalView?
 
-    init(workingDirectory: URL, command: String? = nil, title: String? = nil) {
+    init(
+        workingDirectory: URL,
+        command: String? = nil,
+        title: String? = nil,
+        role: Role = .shell,
+        extraEnvironment: [String: String] = [:]
+    ) {
         self.workingDirectory = workingDirectory
         self.command = command
-        self.defaultTitle = title ?? workingDirectory.lastPathComponent
-        self.title = self.defaultTitle
+        self.role = role
+        self.extraEnvironment = extraEnvironment
+        let resolvedTitle = title ?? workingDirectory.lastPathComponent
+        self.defaultTitle = resolvedTitle
+        self.title = resolvedTitle
+    }
+
+    /// Runs a command in this (reusable) session, replacing any running process.
+    /// Used by the project action runner so all actions share one Run tab.
+    func run(command: String, title: String, extraEnvironment: [String: String]) {
+        self.command = command
+        self.defaultTitle = title
+        self.title = title
+        self.extraEnvironment = extraEnvironment
+        if let terminalView {
+            if isRunning { terminalView.terminate() }
+            startShell(shellOverride: lastShellOverride, on: terminalView)
+        }
+        // If the view isn't built yet, makeTerminalView starts `command` on build.
     }
 
     /// Returns the terminal view, creating it and starting the shell on first
@@ -69,15 +102,16 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
     private func startShell(shellOverride: String?, on view: LocalProcessTerminalView) {
         let shell = ShellResolver.resolve(override: shellOverride)
+        lastShellOverride = shellOverride
         title = defaultTitle
         exitCode = nil
-        // For an agent, run it through a login shell (`-l -c`) so it inherits
-        // the user's PATH; otherwise launch a normal interactive login shell.
+        // For a command (agent / action), run it through a login shell (`-l -c`)
+        // so it inherits the user's PATH; otherwise launch an interactive shell.
         let args = command.map { ["-l", "-c", $0] } ?? shell.args
         view.startProcess(
             executable: shell.executable,
             args: args,
-            environment: ShellResolver.environment(),
+            environment: ShellResolver.environment(extra: extraEnvironment),
             execName: shell.execName,
             currentDirectory: workingDirectory.path(percentEncoded: false)
         )
