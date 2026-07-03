@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import AppIntents
+import Quartz
 
 /// The sidebar file browser, backed by `NSOutlineView` for native, Finder-grade
 /// behavior: click-to-open, inline rename (double-click / Enter), a right-click
@@ -177,6 +178,10 @@ struct FileOutlineView: NSViewRepresentable {
 
         func outlineViewSelectionDidChange(_ notification: Notification) {
             guard let outlineView = notification.object as? NSOutlineView else { return }
+            // Keep an open Quick Look panel in sync as selection moves.
+            if QLPreviewPanel.sharedPreviewPanelExists(), QLPreviewPanel.shared().isVisible {
+                QLPreviewPanel.shared().reloadData()
+            }
             let row = outlineView.selectedRow
             guard row >= 0, let node = outlineView.item(atRow: row) as? FileNode, !node.isDirectory else {
                 return
@@ -454,6 +459,38 @@ struct FileOutlineView: NSViewRepresentable {
             if menuItem.action == #selector(pasteItems) { return canPaste() }
             return true
         }
+
+        // MARK: - Quick Look
+
+        /// The URLs of the current selection, previewed by Quick Look (Space).
+        var selectedFileURLs: [URL] {
+            guard let outlineView else { return [] }
+            return outlineView.selectedRowIndexes.compactMap {
+                (outlineView.item(atRow: $0) as? FileNode)?.url
+            }
+        }
+    }
+}
+
+// MARK: - Quick Look panel data source / delegate
+
+extension FileOutlineView.Coordinator: QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        selectedFileURLs.count
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
+        selectedFileURLs[index] as NSURL
+    }
+
+    /// Forward arrow keys to the outline so selection (and the preview) can move
+    /// while the panel has key focus.
+    func previewPanel(_ panel: QLPreviewPanel!, handle event: NSEvent!) -> Bool {
+        if event.type == .keyDown, event.keyCode == 125 || event.keyCode == 126 {
+            outlineView?.keyDown(with: event)
+            return true
+        }
+        return false
     }
 }
 
@@ -490,7 +527,30 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
             editColumn(0, row: selectedRow, with: nil, select: true)
             return
         }
+        // Space toggles Quick Look for the selected file(s).
+        if event.keyCode == 49, let panel = QLPreviewPanel.shared() {
+            if panel.isVisible {
+                panel.orderOut(nil)
+            } else {
+                panel.makeKeyAndOrderFront(nil)
+            }
+            return
+        }
         super.keyDown(with: event)
+    }
+
+    // MARK: - Quick Look panel control
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool { true }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = coordinator
+        panel.delegate = coordinator
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        panel.dataSource = nil
+        panel.delegate = nil
     }
 
     // MARK: - Services requestor
