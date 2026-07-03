@@ -11,6 +11,9 @@ struct SettingsView: View {
             Tab("Terminal", systemImage: "terminal") {
                 TerminalSettingsView()
             }
+            Tab("MCP", systemImage: "point.3.filled.connected.trianglepath.dotted") {
+                MCPSettingsView()
+            }
             Tab("Command Line", systemImage: "command") {
                 CommandLineSettingsView()
             }
@@ -156,6 +159,110 @@ private struct TerminalSettingsView: View {
         panel.prompt = "Choose Shell"
         if panel.runModal() == .OK, let url = panel.url {
             settings.terminalShellPath = url.path(percentEncoded: false)
+        }
+    }
+}
+
+private struct MCPSettingsView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var status: String?
+    @State private var isError = false
+
+    var body: some View {
+        @Bindable var settings = settings
+        Form {
+            Section("Agent") {
+                Picker("Your Agent", selection: $settings.agentKind) {
+                    ForEach(AgentKind.allCases) { Text($0.displayName).tag($0) }
+                }
+                Text("Determines which config file format Ibis writes below.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("MCP Server") {
+                if MCPService.isAvailable {
+                    Toggle("Enable MCP Server", isOn: $settings.mcpEnabled)
+                        .onChange(of: settings.mcpEnabled) { _, _ in MCPService.apply(settings: settings) }
+
+                    LabeledContent("Status") {
+                        if let port = MCPService.runningPort {
+                            Label("Running on 127.0.0.1:\(port)", systemImage: "circle.fill")
+                                .foregroundStyle(.green)
+                                .labelStyle(.titleAndIcon)
+                        } else {
+                            Text("Stopped").foregroundStyle(.secondary)
+                        }
+                    }
+
+                    TextField("Preferred Port", value: $settings.mcpPort, format: .number.grouping(.never))
+                        .onChange(of: settings.mcpPort) { _, _ in
+                            if settings.mcpEnabled { MCPService.restart(settings: settings) }
+                        }
+
+                    LabeledContent("Token") {
+                        HStack {
+                            Text(settings.mcpToken)
+                                .font(.caption.monospaced())
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Button("Regenerate") {
+                                settings.mcpToken = AppSettings.freshToken()
+                                if settings.mcpEnabled { MCPService.restart(settings: settings) }
+                            }
+                        }
+                    }
+
+                    Text("Lets your agent drive and read this editor. Bound to localhost only; the token above authorizes clients.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("The SwiftMCP package isn't linked in this build, so the server is unavailable.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Project Configuration") {
+                Button("Add Ibis to \(settings.agentKind.displayName) Config") {
+                    writeConfig()
+                }
+                .disabled(MCPBridge.shared.activeWorkspace == nil)
+
+                if let status {
+                    Text(status)
+                        .font(.callout)
+                        .foregroundStyle(isError ? .red : .secondary)
+                }
+
+                Text("Writes the Ibis MCP server entry into the frontmost project so your agent can connect.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func writeConfig() {
+        guard let root = MCPBridge.shared.activeWorkspace?.rootURL else {
+            status = "Open a project window first."
+            isError = true
+            return
+        }
+        let port = MCPService.runningPort ?? settings.mcpPort
+        do {
+            let result = try MCPConfigWriter.write(
+                agent: settings.agentKind,
+                projectRoot: root,
+                port: port,
+                token: settings.mcpToken
+            )
+            status = result.message
+            isError = false
+        } catch {
+            status = "Couldn't write config: \(error.localizedDescription)"
+            isError = true
         }
     }
 }

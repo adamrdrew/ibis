@@ -7,6 +7,26 @@ enum TerminalPlacement: String, CaseIterable {
     case trailing
 }
 
+/// The coding agent the user runs, which determines the MCP config file format
+/// Ibis writes for it.
+enum AgentKind: String, CaseIterable, Identifiable {
+    case claude
+    case codex
+    case antigravity
+    case custom
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .claude: "Claude Code"
+        case .codex: "Codex"
+        case .antigravity: "Antigravity"
+        case .custom: "Custom"
+        }
+    }
+}
+
 /// User-configurable editor and appearance settings, shared across all windows
 /// through the environment and persisted to `UserDefaults`.
 @Observable
@@ -45,6 +65,18 @@ final class AppSettings {
     var agentName: String { didSet { defaults.set(agentName, forKey: Key.agentName) } }
     var agentCommand: String { didSet { defaults.set(agentCommand, forKey: Key.agentCommand) } }
     var agentArgs: String { didSet { defaults.set(agentArgs, forKey: Key.agentArgs) } }
+    /// Which agent the user runs, so Ibis can write that agent's MCP config format.
+    var agentKind: AgentKind { didSet { defaults.set(agentKind.rawValue, forKey: Key.agentKind) } }
+
+    // MARK: MCP server
+
+    /// Whether Ibis's embedded MCP server is enabled (lets agents drive/read the
+    /// editor). Off by default; binds to 127.0.0.1 only.
+    var mcpEnabled: Bool { didSet { defaults.set(mcpEnabled, forKey: Key.mcpEnabled) } }
+    /// Preferred listen port (0 = pick an ephemeral port).
+    var mcpPort: Int { didSet { defaults.set(mcpPort, forKey: Key.mcpPort) } }
+    /// Shared bearer token required by the server and written into agent configs.
+    var mcpToken: String { didSet { defaults.set(mcpToken, forKey: Key.mcpToken) } }
 
     /// The shell-ready command line for the configured agent, or nil if unset.
     var agentCommandLine: String? {
@@ -82,6 +114,21 @@ final class AppSettings {
         agentName = defaults.string(forKey: Key.agentName) ?? "Claude"
         agentCommand = defaults.string(forKey: Key.agentCommand) ?? "claude"
         agentArgs = defaults.string(forKey: Key.agentArgs) ?? ""
+        agentKind = defaults.string(forKey: Key.agentKind).flatMap(AgentKind.init) ?? .claude
+        mcpEnabled = defaults.bool(forKey: Key.mcpEnabled)
+        mcpPort = defaults.object(forKey: Key.mcpPort) as? Int ?? 4319
+        mcpToken = defaults.string(forKey: Key.mcpToken) ?? Self.generateToken()
+    }
+
+    /// A URL-safe random token used as the MCP bearer credential.
+    static func freshToken() -> String { generateToken() }
+
+    private static func generateToken() -> String {
+        let bytes = (0..<24).map { _ in UInt8.random(in: 0...255) }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private enum Key {
@@ -102,5 +149,9 @@ final class AppSettings {
         static let agentName = "agent.name"
         static let agentCommand = "agent.command"
         static let agentArgs = "agent.args"
+        static let agentKind = "agent.kind"
+        static let mcpEnabled = "mcp.enabled"
+        static let mcpPort = "mcp.port"
+        static let mcpToken = "mcp.token"
     }
 }

@@ -19,6 +19,8 @@ struct WorkspaceView: View {
     @State private var searchModel = ProjectSearchModel()
     @State private var goToLineText = ""
 
+    @State private var bridge = MCPBridge.shared
+
     var body: some View {
         VStack(spacing: 0) {
             splitView
@@ -27,6 +29,19 @@ struct WorkspaceView: View {
                 StatusBarView(git: workspace.git)
             }
         }
+        // Transient banner posted by the MCP `notify` tool.
+        .overlay(alignment: .top) {
+            if let banner = bridge.banner {
+                MCPBannerView(text: banner)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: banner) {
+                        try? await Task.sleep(for: .seconds(4))
+                        bridge.banner = nil
+                    }
+            }
+        }
+        .animation(.easeInOut(duration: 0.2), value: bridge.banner)
     }
 
     private var splitView: some View {
@@ -123,9 +138,14 @@ struct WorkspaceView: View {
             }
             Button("Cancel", role: .cancel) { goToLineText = "" }
         }
+        // Start/stop the MCP server to match settings (idempotent), and let
+        // agent tools address this window.
+        .task { MCPService.apply(settings: settings) }
+        .onDisappear { if let workspace { MCPBridge.shared.unregister(workspace) } }
         .task(id: ref) {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
+            MCPBridge.shared.register(workspace)
             await workspace.rootNode.loadChildren()
             workspace.refreshRootEmptiness()
             if ref.isDirectory {
@@ -321,6 +341,27 @@ struct WorkspaceView: View {
             document.pendingSelection = range
             workspace.layout.activePane?.open(document)
         }
+    }
+}
+
+/// A small floating banner used by the MCP `notify` tool.
+private struct MCPBannerView: View {
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(Color.ibisKelly)
+            Text(text)
+                .font(.callout)
+                .lineLimit(2)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.separator))
+        .shadow(radius: 8, y: 2)
+        .accessibilityLabel("Agent notification: \(text)")
     }
 }
 

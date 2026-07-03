@@ -428,6 +428,8 @@ final class EditorTextView: NSTextView {
 
     override func becomeFirstResponder() -> Bool {
         onActivate?()
+        // Remember the focused editor so the MCP `get_selection` tool can read it.
+        MCPBridge.shared.activeTextView = self
         return super.becomeFirstResponder()
     }
 
