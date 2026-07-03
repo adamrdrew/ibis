@@ -92,6 +92,11 @@ struct WorkspaceView: View {
         .background {
             WindowCloseGuard { workspace?.confirmWindowClose() ?? true }
         }
+        // Mirror the active document's dirty state into the window's close-button
+        // dot. Re-evaluates whenever the observed dirty flag / active tab changes.
+        .background {
+            WindowEditedIndicator(edited: activeDocument?.isDirty ?? false)
+        }
         // Expose the frontmost window's workspace and sidebar mode to the menu
         // bar. Scene-scoped (not focus-scoped) so commands like Show Terminal
         // work whenever the window is active, even with no editor focused.
@@ -231,6 +236,8 @@ struct WorkspaceView: View {
             }
             .navigationTitle(activeDocument?.name ?? workspace.displayName)
             .navigationSubtitle(workspace.displayName)
+            // Title-bar proxy icon (⌘-click path menu, draggable to Finder).
+            .navigationDocument(activeDocument?.url ?? workspace.rootURL)
         } else {
             ContentUnavailableView(
                 "No File Open",
@@ -263,6 +270,21 @@ struct WorkspaceView: View {
             await document.loadIfNeeded()
             document.pendingSelection = range
             workspace.layout.activePane?.open(document)
+        }
+    }
+}
+
+/// Mirrors a document's dirty state into the hosting `NSWindow`'s
+/// `isDocumentEdited`, which draws the dot in the red close button.
+private struct WindowEditedIndicator: NSViewRepresentable {
+    var edited: Bool
+
+    func makeNSView(context: Context) -> NSView { NSView(frame: .zero) }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let edited = edited
+        DispatchQueue.main.async {
+            nsView.window?.isDocumentEdited = edited
         }
     }
 }
