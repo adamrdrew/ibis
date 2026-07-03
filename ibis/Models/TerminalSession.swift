@@ -39,6 +39,9 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// built lazily the first time the tab is shown.
     @ObservationIgnored private(set) var terminalView: LocalProcessTerminalView?
 
+    /// Called when the shell process exits (used by the action runner).
+    @ObservationIgnored var onExit: (() -> Void)?
+
     init(
         workingDirectory: URL,
         command: String? = nil,
@@ -132,5 +135,6 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         self.exitCode = exitCode
         isRunning = false
+        onExit?()
     }
 }

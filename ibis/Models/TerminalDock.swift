@@ -25,6 +25,22 @@ final class TerminalDock {
         sessions.first { $0.id == activeSessionID } ?? sessions.first
     }
 
+    /// The reusable action session, if it exists.
+    var runSession: TerminalSession? {
+        sessions.first { $0.role == .run }
+    }
+
+    /// Whether a project action is currently running. Stored (not derived from
+    /// the session) so the toolbar reliably observes it — SwiftUI toolbars don't
+    /// track a value read through nested computed properties across objects.
+    private(set) var isActionRunning = false
+
+    /// Stops the running action (terminates the Run session's process).
+    func stopAction() {
+        runSession?.terminate()
+        isActionRunning = false
+    }
+
     /// Creates a new terminal tab rooted at the workspace and focuses it. Pass a
     /// `command` (and `title`) to run something specific, e.g. an agent.
     @discardableResult
@@ -44,11 +60,16 @@ final class TerminalDock {
     /// Runs a project action in a single reusable "Run" tab (replacing whatever
     /// it was running), so actions never spawn a pile of one-off terminals.
     func runAction(name: String, command: String) {
-        if let session = sessions.first(where: { $0.role == .run }) {
+        // Never start a new action while one is running (avoids clobbering the
+        // reused view's process state; the toolbar also disables this).
+        guard !isActionRunning else { return }
+
+        let session: TerminalSession
+        if let existing = sessions.first(where: { $0.role == .run }) {
+            session = existing
             session.run(command: command, title: name, extraEnvironment: projectEnv)
-            activeSessionID = session.id
         } else {
-            let session = TerminalSession(
+            session = TerminalSession(
                 workingDirectory: workingDirectory,
                 command: command,
                 title: name,
@@ -56,8 +77,10 @@ final class TerminalDock {
                 extraEnvironment: projectEnv
             )
             sessions.append(session)
-            activeSessionID = session.id
         }
+        session.onExit = { [weak self] in self?.isActionRunning = false }
+        isActionRunning = true
+        activeSessionID = session.id
         isVisible = true
     }
 

@@ -507,6 +507,14 @@ final class Workspace {
         terminal.runAction(name: action.name, command: action.command)
     }
 
+    /// Whether a project action is currently running (for the toolbar's play/stop).
+    var isActionRunning: Bool { terminal.isActionRunning }
+
+    /// Stops the running project action.
+    func stopProjectAction() {
+        terminal.stopAction()
+    }
+
     /// Re-applies project env to the dock after settings change (affects new
     /// sessions; already-running shells keep their environment).
     func applyProjectEnv() {

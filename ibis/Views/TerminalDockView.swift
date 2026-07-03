@@ -85,7 +85,9 @@ struct TerminalDockView: View {
                 font: terminalFont,
                 shellOverride: shellOverride
             )
-            if !session.isRunning {
+            // Action (run) sessions just show their final output when done —
+            // no "Shell exited — Restart" affordance (that's for shells/agents).
+            if !session.isRunning && session.role != .run {
                 TerminalExitedOverlay(
                     session: session,
                     isActive: isActive,

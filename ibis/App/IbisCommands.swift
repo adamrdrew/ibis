@@ -157,6 +157,10 @@ struct IbisCommands: Commands {
             if let workspace {
                 ForEach(workspace.projectConfig.runnableActions) { action in
                     Button("Run \(action.name)") { workspace.runProjectAction(action) }
+                        .disabled(workspace.isActionRunning)
+                }
+                if workspace.isActionRunning {
+                    Button("Stop Running Action") { workspace.stopProjectAction() }
                 }
                 if !workspace.projectConfig.runnableActions.isEmpty {
                     Divider()

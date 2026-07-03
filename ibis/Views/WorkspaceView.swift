@@ -86,13 +86,26 @@ struct WorkspaceView: View {
                     .labelsHidden()
                     .pickerStyle(.menu)
                     .frame(minWidth: 90)
+                    // Can't switch actions while one is running.
+                    .disabled(workspace.terminal.isActionRunning)
 
+                    // One button with conditional content (not a structural
+                    // if/else, which SwiftUI handles unreliably in a toolbar
+                    // group): Run when idle, Stop while an action is running.
                     Button {
-                        runSelectedAction()
+                        if workspace.terminal.isActionRunning {
+                            workspace.stopProjectAction()
+                        } else {
+                            runSelectedAction()
+                        }
                     } label: {
-                        Label("Run Action", systemImage: "play.fill")
+                        Label(
+                            workspace.terminal.isActionRunning ? "Stop Action" : "Run Action",
+                            systemImage: workspace.terminal.isActionRunning ? "stop.fill" : "play.fill"
+                        )
                     }
-                    .help("Run the selected action")
+                    .tint(workspace.terminal.isActionRunning ? .red : nil)
+                    .help(workspace.terminal.isActionRunning ? "Stop the running action" : "Run the selected action")
                 }
             }
 
@@ -177,6 +190,13 @@ struct WorkspaceView: View {
         // Persist tabs/panes/selection whenever the layout changes.
         .onChange(of: workspace?.layoutFingerprint) { _, _ in
             workspace?.persistLayoutState()
+        }
+        // Default the action picker to the first action, keeping it valid as the
+        // configured actions change.
+        .onChange(of: workspace?.projectConfig.runnableActions.map(\.name) ?? [], initial: true) { _, names in
+            if selectedActionName == nil || !(names.contains { $0 == selectedActionName }) {
+                selectedActionName = names.first
+            }
         }
         // Go to Line prompt (⌘L), driven by the workspace's request flag.
         .alert("Go to Line", isPresented: goToLinePresented) {
