@@ -130,6 +130,12 @@ struct WorkspaceView: View {
             if !ref.isDirectory {
                 selection = workspace.rootNode.id
             }
+            // Honor an "Open in Agent" request (one-shot; restored windows never
+            // re-launch the agent because they aren't in the pending set).
+            if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL),
+               let command = settings.agentCommandLine {
+                workspace.runAgent(command: command, name: settings.agentName)
+            }
         }
         .task(id: selection) {
             guard let selection, let workspace else { return }

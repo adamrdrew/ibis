@@ -28,10 +28,12 @@ struct OpenPathIntent: AppIntent {
 
 enum OpenPathError: Error, CustomLocalizedStringResourceConvertible {
     case notFound(String)
+    case notAFolder(String)
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
         case .notFound(let path): "There's no file or folder at \(path)."
+        case .notAFolder(let path): "\(path) isn't a folder."
         }
     }
 }
