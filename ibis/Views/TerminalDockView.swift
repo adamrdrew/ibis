@@ -61,14 +61,71 @@ struct TerminalDockView: View {
         ZStack {
             Color(nsColor: .textBackgroundColor)
             ForEach(dock.sessions) { session in
-                TerminalSessionView(
-                    session: session,
-                    font: terminalFont,
-                    shellOverride: shellOverride
-                )
-                .opacity(session.id == dock.activeSessionID ? 1 : 0)
-                .allowsHitTesting(session.id == dock.activeSessionID)
+                sessionView(session)
             }
         }
+    }
+
+    private func sessionView(_ session: TerminalSession) -> some View {
+        let isActive = session.id == dock.activeSessionID
+        return ZStack {
+            TerminalSessionView(
+                session: session,
+                font: terminalFont,
+                shellOverride: shellOverride
+            )
+            if !session.isRunning {
+                TerminalExitedOverlay(
+                    session: session,
+                    isActive: isActive,
+                    onRestart: { session.restart(shellOverride: shellOverride) }
+                )
+            }
+        }
+        .opacity(isActive ? 1 : 0)
+        .allowsHitTesting(isActive)
+    }
+}
+
+/// Shown over a terminal whose shell has exited: a dimmed cover with the exit
+/// status and a restart control (also triggered by Return when active).
+private struct TerminalExitedOverlay: View {
+    let session: TerminalSession
+    let isActive: Bool
+    let onRestart: () -> Void
+
+    private var statusText: String {
+        if let code = session.exitCode, code != 0 {
+            return "Shell exited with code \(code)."
+        }
+        return "Shell exited."
+    }
+
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(.black.opacity(0.35))
+
+            VStack(spacing: 12) {
+                Image(systemName: "power")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                Text(statusText)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                if isActive {
+                    Button("Restart", action: onRestart)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.ibisKelly)
+                        .keyboardShortcut(.return, modifiers: [])
+                } else {
+                    Button("Restart", action: onRestart)
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.ibisKelly)
+                }
+            }
+            .padding(24)
+        }
+        .contentShape(Rectangle())
     }
 }

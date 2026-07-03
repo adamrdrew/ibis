@@ -16,6 +16,8 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     var title: String
     /// False once the shell process exits (until restarted).
     private(set) var isRunning = false
+    /// The shell's exit status, once it has exited (nil while running).
+    private(set) var exitCode: Int32?
 
     /// The live terminal view. AppKit-managed, so excluded from observation;
     /// built lazily the first time the tab is shown.
@@ -60,6 +62,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     private func startShell(shellOverride: String?, on view: LocalProcessTerminalView) {
         let shell = ShellResolver.resolve(override: shellOverride)
         title = workingDirectory.lastPathComponent
+        exitCode = nil
         view.startProcess(
             executable: shell.executable,
             args: shell.args,
@@ -82,6 +85,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
+        self.exitCode = exitCode
         isRunning = false
     }
 }
