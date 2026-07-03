@@ -217,7 +217,7 @@ struct IbisCommands: Commands {
     // MARK: - Helpers
 
     private func runAgent() {
-        guard let workspace, let command = settings.agentCommandLine else { return }
+        guard let workspace, let command = MCPService.launchCommand(settings: settings) else { return }
         MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
     }

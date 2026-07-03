@@ -184,6 +184,33 @@ enum MCPService {
         #endif
     }
 
+    /// Orientation injected into the agent's context at launch, so it knows it
+    /// is running in Ibis and how to use the Ibis tools. No apostrophes/quotes so
+    /// it embeds safely in a single-quoted shell argument.
+    static let agentOrientation = """
+    You are running inside Ibis, a collaborative workspace where a human and an agent work together in a single project window. The human directs and reviews the work and may not read code directly, so prefer showing results in Ibis over pasting large output into the terminal.
+
+    You have Ibis tools (via MCP) scoped to THIS project window:
+    - open_file(path, line): open a file in a tab for the human to see, optionally at a line.
+    - reveal_in_tree(path): select a file in the file browser.
+    - open_content(title, content, format): open rich output in a new unsaved tab. Use markdown or html when the answer is best shown as a rendered report, summary, table, or document rather than plain terminal text.
+    - propose_edit and propose_patch: make code changes that the human reviews as a diff and approves before they are applied and saved.
+    - ask_human(question, options): ask the human a question in their editor when it concerns what they are looking at.
+    - get_active_file, get_selection, get_open_tabs, get_workspace_root: see what the human is currently focused on.
+
+    When the human asks to open or see a file, use open_file. When they ask for information best represented richly, build it as markdown or html and open it with open_content.
+    """
+
+    /// The shell command to launch the configured agent, augmented with the Ibis
+    /// orientation when we know how to inject it (Claude) and MCP is on. Returns
+    /// nil if no agent is configured.
+    static func launchCommand(settings: AppSettings) -> String? {
+        guard let base = settings.agentCommandLine else { return nil }
+        guard settings.mcpEnabled, settings.agentKind == .claude else { return base }
+        let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
+        return base + " --append-system-prompt '" + prompt + "'"
+    }
+
     /// Before launching an agent into a project, write that project's MCP config
     /// (pointing at the running server with the project's token) so the hosted
     /// agent is automatically bound to its own window. No-op if MCP is off.

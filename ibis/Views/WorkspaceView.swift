@@ -174,7 +174,7 @@ struct WorkspaceView: View {
             // Honor an "Open in Agent" request (one-shot; restored windows never
             // re-launch the agent because they aren't in the pending set).
             if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL),
-               let command = settings.agentCommandLine {
+               let command = MCPService.launchCommand(settings: settings) {
                 MCPService.bindAgent(to: workspace, settings: settings)
                 workspace.runAgent(command: command, name: settings.agentName)
             }
@@ -274,7 +274,7 @@ struct WorkspaceView: View {
 
     /// Launches the configured agent in a new terminal, revealing the dock.
     private func openAgent() {
-        guard let workspace, let command = settings.agentCommandLine else { return }
+        guard let workspace, let command = MCPService.launchCommand(settings: settings) else { return }
         MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
     }
