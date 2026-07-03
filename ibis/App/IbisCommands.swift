@@ -5,6 +5,9 @@ import AppKit
 /// new windows.
 let workspaceWindowID = "workspace"
 
+/// Identifier for the singleton Welcome / launcher window.
+let welcomeWindowID = "welcome"
+
 /// The app's menu bar: File / View / Editor commands wired to the focused
 /// window's `Workspace` (via `@FocusedValue`) and to the shared `AppSettings`.
 /// Standard Edit (undo/cut/copy/paste), Find, and Sidebar commands come from
@@ -20,7 +23,7 @@ struct IbisCommands: Commands {
         // MARK: File
         CommandGroup(replacing: .newItem) {
             Button("New Window") {
-                openWindow(id: workspaceWindowID)
+                openWindow(id: welcomeWindowID)
             }
             .keyboardShortcut("n")
 

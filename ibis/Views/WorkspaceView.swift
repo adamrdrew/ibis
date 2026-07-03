@@ -19,6 +19,16 @@ struct WorkspaceView: View {
     @State private var searchModel = ProjectSearchModel()
 
     var body: some View {
+        VStack(spacing: 0) {
+            splitView
+            if let workspace {
+                Divider()
+                StatusBarView(git: workspace.git)
+            }
+        }
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 520)

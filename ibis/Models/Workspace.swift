@@ -11,6 +11,7 @@ final class Workspace {
     let rootNode: FileNode
     let layout = EditorLayout()
     let terminal: TerminalDock
+    let git: GitStatusModel
 
     /// Holds security-scoped access to the root open for the workspace's lifetime.
     private let access: SecurityScopedAccess
@@ -31,9 +32,10 @@ final class Workspace {
         self.isDirectory = isDirectory
         self.access = SecurityScopedAccess(url: rootURL)
         self.rootNode = FileNode(url: rootURL, isDirectory: isDirectory)
-        // Terminals open in the folder (or a single file's containing folder).
+        // Terminals and Git status use the folder (or a single file's folder).
         let terminalRoot = isDirectory ? rootURL : rootURL.deletingLastPathComponent()
         self.terminal = TerminalDock(workingDirectory: terminalRoot)
+        self.git = GitStatusModel(root: terminalRoot)
 
         if isDirectory {
             watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
@@ -42,6 +44,8 @@ final class Workspace {
                 }
             }
         }
+
+        git.refresh()
     }
 
     /// Immediately re-reads a directory node (if loaded), for snappy updates
@@ -55,6 +59,10 @@ final class Workspace {
 
     /// Reloads the loaded directory nodes affected by filesystem changes.
     private func handleFileSystemChanges(_ paths: [String]) async {
+        // Any change on disk (including inside .git — commits, branch switches,
+        // staging) may affect Git status, so refresh it too.
+        git.refresh()
+
         var reloaded = Set<URL>()
         for path in paths {
             let directory = URL(filePath: path).standardizedFileURL

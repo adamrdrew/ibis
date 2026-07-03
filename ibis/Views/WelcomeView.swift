@@ -4,6 +4,8 @@ import AppKit
 /// The empty-window landing screen. Offers quick ways to open a file or folder.
 struct WelcomeView: View {
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismiss) private var dismiss
+    @State private var router = LaunchRouter.shared
 
     var body: some View {
         VStack(spacing: 28) {
@@ -45,8 +47,14 @@ struct WelcomeView: View {
                 .font(.footnote)
                 .foregroundStyle(.tertiary)
         }
-        .padding(48)
-        .frame(minWidth: 520, minHeight: 440)
+        .padding(44)
+        .frame(width: 460)
+        // Finder / CLI opens that arrive at launch: turn them into editor
+        // windows and close the launcher.
+        .onAppear(perform: drainPendingOpens)
+        .onChange(of: router.pendingCount) { _, count in
+            if count > 0 { drainPendingOpens() }
+        }
     }
 
     private func openPanel(chooseDirectories: Bool) {
@@ -57,5 +65,13 @@ struct WelcomeView: View {
         panel.prompt = "Open"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         openWindow(value: WorkspaceRef(url: url, isDirectory: chooseDirectories))
+        dismiss()
+    }
+
+    private func drainPendingOpens() {
+        let pending = router.drain()
+        guard !pending.isEmpty else { return }
+        for ref in pending { openWindow(value: ref) }
+        dismiss()
     }
 }

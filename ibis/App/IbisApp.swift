@@ -11,11 +11,24 @@ struct IbisApp: App {
     @State private var settings = AppSettings()
 
     var body: some Scene {
+        // The launcher: a compact, content-sized, non-resizable window shown at
+        // startup. It's the app's primary scene, so it opens on a plain launch.
+        Window("Welcome to Ibis", id: welcomeWindowID) {
+            WelcomeView()
+                .environment(settings)
+                .tint(.ibisKelly)
+        }
+        .windowResizability(.contentSize)
+        .restorationBehavior(.disabled)
+        .defaultPosition(.center)
+
+        // Editor windows, one per opened folder/file, at a roomy 4:3 default.
         WindowGroup(id: workspaceWindowID, for: WorkspaceRef.self) { $ref in
             WorkspaceRootView(ref: ref)
                 .environment(settings)
                 .tint(.ibisKelly)
         }
+        .defaultSize(width: 1280, height: 960)
         .commands {
             IbisCommands(settings: settings)
         }
