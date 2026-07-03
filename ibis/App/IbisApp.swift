@@ -16,7 +16,6 @@ struct IbisApp: App {
         Window("Welcome to Ibis", id: welcomeWindowID) {
             WelcomeView()
                 .environment(settings)
-                .tint(.ibisKelly)
         }
         .windowResizability(.contentSize)
         .restorationBehavior(.disabled)
@@ -26,7 +25,6 @@ struct IbisApp: App {
         WindowGroup(id: workspaceWindowID, for: WorkspaceRef.self) { $ref in
             WorkspaceRootView(ref: ref)
                 .environment(settings)
-                .tint(.ibisKelly)
         }
         .defaultSize(width: 1280, height: 960)
         .commands {
@@ -36,7 +34,6 @@ struct IbisApp: App {
         Settings {
             SettingsView()
                 .environment(settings)
-                .tint(.ibisKelly)
         }
     }
 }
