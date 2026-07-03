@@ -114,22 +114,73 @@ final class MCPBridge {
     /// Shows the human a diff of `newContent` vs the current file and waits for
     /// their decision, applying it (buffer + save) only if approved.
     func proposeEdit(token: String?, path: String, newContent: String) async throws -> String {
-        let workspace = try workspace(for: token)
-        let url = resolve(path, in: workspace)
+        let (workspace, url) = try target(token: token, path: path)
+        return try await reviewAndApply(in: workspace, url: url, before: currentContent(of: url, in: workspace), after: newContent)
+    }
 
-        let before = workspace.openedDocument(for: url)?.text
+    /// Applies a set of `old → new` string edits to the current file content and
+    /// runs the same diff review. Small, surgical edits stay cheap and still go
+    /// through the approval gate. Errors are actionable so a mismatch is
+    /// re-proposed through the gate rather than routed around it.
+    func proposePatch(token: String?, path: String, edits: [ProposedEdit]) async throws -> String {
+        let (workspace, url) = try target(token: token, path: path)
+        let before = currentContent(of: url, in: workspace)
+        let after = try applyEdits(edits, to: before, fileName: url.lastPathComponent)
+        return try await reviewAndApply(in: workspace, url: url, before: before, after: after)
+    }
+
+    // MARK: Edit helpers
+
+    private func target(token: String?, path: String) throws -> (Workspace, URL) {
+        let workspace = try workspace(for: token)
+        return (workspace, resolve(path, in: workspace))
+    }
+
+    private func currentContent(of url: URL, in workspace: Workspace) -> String {
+        workspace.openedDocument(for: url)?.text
             ?? (try? String(contentsOf: url, encoding: .utf8))
             ?? ""
-        guard let proposal = LineDiff.proposal(fileURL: url, before: before, after: newContent) else {
-            return "No changes to \(url.lastPathComponent) — the proposed content matches the current file."
+    }
+
+    private func applyEdits(_ edits: [ProposedEdit], to content: String, fileName: String) throws -> String {
+        guard !edits.isEmpty else { throw MCPToolFailure("No edits provided.") }
+        var working = content
+        for (index, edit) in edits.enumerated() {
+            let n = index + 1
+            guard !edit.oldString.isEmpty else {
+                throw MCPToolFailure("Edit \(n): oldString is empty.")
+            }
+            if edit.replaceAll == true {
+                guard working.contains(edit.oldString) else {
+                    throw MCPToolFailure("Edit \(n): the text to replace wasn't found in \(fileName).")
+                }
+                working = working.replacingOccurrences(of: edit.oldString, with: edit.newString)
+            } else {
+                let occurrences = working.components(separatedBy: edit.oldString).count - 1
+                if occurrences == 0 {
+                    throw MCPToolFailure("Edit \(n): the text to replace wasn't found in \(fileName). Re-read the file and match it exactly (including whitespace).")
+                }
+                if occurrences > 1 {
+                    throw MCPToolFailure("Edit \(n): the text to replace appears \(occurrences) times in \(fileName). Add surrounding context to make it unique, or set replaceAll.")
+                }
+                if let range = working.range(of: edit.oldString) {
+                    working.replaceSubrange(range, with: edit.newString)
+                }
+            }
+        }
+        return working
+    }
+
+    private func reviewAndApply(in workspace: Workspace, url: URL, before: String, after: String) async throws -> String {
+        guard let proposal = LineDiff.proposal(fileURL: url, before: before, after: after) else {
+            return "No changes to \(url.lastPathComponent) — the result matches the current file."
         }
         guard workspace.pendingDiff == nil else {
             throw MCPToolFailure("A diff review is already open in this window; resolve it first.")
         }
-
         let approved = await workspace.awaitDiffDecision(proposal)
         if approved {
-            await workspace.applyProposedEdit(url: url, content: newContent)
+            await workspace.applyProposedEdit(url: url, content: after)
             return "Applied changes to \(url.lastPathComponent) (+\(proposal.added) −\(proposal.removed))."
         }
         return "The human declined the changes to \(url.lastPathComponent)."
@@ -209,6 +260,16 @@ final class MCPBridge {
         }
         return workspace.rootURL.appending(path: expanded).standardizedFileURL
     }
+}
+
+/// One find-and-replace edit for `propose_patch`.
+struct ProposedEdit: Sendable, Codable {
+    /// The exact text to find (include enough surrounding context to be unique).
+    let oldString: String
+    /// The text to replace it with.
+    let newString: String
+    /// Replace every occurrence instead of requiring a unique match.
+    let replaceAll: Bool?
 }
 
 /// A tool-level failure with a message shown to the agent.

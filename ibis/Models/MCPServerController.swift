@@ -30,6 +30,16 @@ final class IbisMCPServer {
         try await MCPBridge.shared.proposeEdit(token: await projectToken(), path: path, newContent: newContent)
     }
 
+    /// Propose one or more find-and-replace edits to a file and wait for the
+    /// human to review the resulting diff. Prefer this over open_file+propose_edit
+    /// for small or surgical changes — it keeps corrections cheap and still routes
+    /// them through the same approval gate. Each edit's `oldString` must match the
+    /// file exactly and uniquely (include context) unless `replaceAll` is set.
+    @MCPTool(name: "propose_patch")
+    func proposePatch(path: String, edits: [ProposedEdit]) async throws -> String {
+        try await MCPBridge.shared.proposePatch(token: await projectToken(), path: path, edits: edits)
+    }
+
     /// Reveal a file in this agent's file browser (expand to it and select it).
     /// The path may be absolute or relative to the workspace root.
     @MCPTool(name: "reveal_in_tree")
@@ -68,8 +78,10 @@ final class IbisMCPServer {
         return "Shown."
     }
 
-    /// Ask the human a question and wait for their answer. Provide `options` to
-    /// present them as buttons; otherwise a single acknowledgement is shown.
+    /// Ask the human a question with a sheet *in their editor window* and wait
+    /// for their answer. Use this (rather than a chat-side question) when the
+    /// question is about what they're looking at in Ibis — it interrupts them
+    /// where their attention already is. Provide `options` to present buttons.
     @MCPTool(name: "ask_human")
     func askHuman(question: String, options: [String] = []) async throws -> String {
         try await MCPBridge.shared.askHuman(token: await projectToken(), question: question, options: options.isEmpty ? nil : options)
