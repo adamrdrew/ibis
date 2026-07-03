@@ -8,7 +8,10 @@ import Observation
 final class ProjectSearchModel {
     var query = ""
     var caseSensitive = false
+    var useRegex = false
+    var wholeWord = false
     var results: [SearchFileResult] = []
+    var summary = SearchSummary()
     var isSearching = false
     /// True once a search has completed for the current query, so the empty
     /// state only appears after real results (not during the debounce window).
@@ -25,8 +28,11 @@ final class ProjectSearchModel {
 
         let query = self.query
         let caseSensitive = self.caseSensitive
+        let useRegex = self.useRegex
+        let wholeWord = self.wholeWord
         guard query.count >= 2 else {
             results = []
+            summary = SearchSummary()
             isSearching = false
             hasSearched = false
             return
@@ -34,16 +40,20 @@ final class ProjectSearchModel {
 
         isSearching = true
         task = Task.detached(priority: .userInitiated) { [weak self] in
-            let found = ProjectSearch.search(
+            let outcome = ProjectSearch.search(
                 root: root,
                 query: query,
                 caseSensitive: caseSensitive,
+                useRegex: useRegex,
+                wholeWord: wholeWord,
                 isCancelled: { Task.isCancelled }
             )
             if Task.isCancelled { return }
             await MainActor.run {
-                guard let self, self.query == query, self.caseSensitive == caseSensitive else { return }
-                self.results = found
+                guard let self, self.query == query, self.caseSensitive == caseSensitive,
+                      self.useRegex == useRegex, self.wholeWord == wholeWord else { return }
+                self.results = outcome.files
+                self.summary = outcome.summary
                 self.isSearching = false
                 self.hasSearched = true
             }
@@ -54,6 +64,7 @@ final class ProjectSearchModel {
         task?.cancel()
         query = ""
         results = []
+        summary = SearchSummary()
         isSearching = false
         hasSearched = false
     }

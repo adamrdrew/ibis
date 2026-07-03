@@ -18,9 +18,26 @@ struct SearchFileResult: Identifiable, Sendable {
     var id: URL { url }
 }
 
-/// Recursive, plain-substring project search. Runs off the main actor, skips
-/// noise directories and binary files, and honors a cancellation check plus
-/// result caps so huge trees stay responsive.
+/// Whether the search stopped short of a full scan, so the UI can say so.
+struct SearchSummary: Sendable {
+    var scannedFiles = 0
+    var hitFileLimit = false
+    var hitMatchLimit = false
+    var skippedLargeFiles = 0
+    var invalidPattern = false
+
+    var isLimited: Bool { hitFileLimit || hitMatchLimit || skippedLargeFiles > 0 }
+}
+
+/// The full outcome of a search: the file results plus a summary of any caps hit.
+struct SearchResults: Sendable {
+    var files: [SearchFileResult] = []
+    var summary = SearchSummary()
+}
+
+/// Recursive project search (plain substring, whole-word, or regex). Runs off
+/// the main actor, skips noise directories, oversized files, and binaries, and
+/// honors a cancellation check plus result caps so huge trees stay responsive.
 enum ProjectSearch {
     private static let ignoredDirectories: Set<String> = [
         ".git", ".svn", ".hg", "node_modules", ".build", "build", "dist",
@@ -30,28 +47,47 @@ enum ProjectSearch {
 
     private static let maxFiles = 500
     private static let maxMatches = 5000
+    /// Files larger than this are skipped (and counted) rather than read whole.
+    private static let maxFileSize = 2 * 1024 * 1024
+
+    private enum Matcher {
+        case substring(String, NSString.CompareOptions)
+        case regex(NSRegularExpression)
+    }
 
     nonisolated static func search(
         root: URL,
         query: String,
         caseSensitive: Bool,
+        useRegex: Bool,
+        wholeWord: Bool,
         isCancelled: @Sendable () -> Bool
-    ) -> [SearchFileResult] {
-        guard !query.isEmpty else { return [] }
+    ) -> SearchResults {
+        guard !query.isEmpty else { return SearchResults() }
+
+        guard let matcher = makeMatcher(query: query, caseSensitive: caseSensitive, useRegex: useRegex, wholeWord: wholeWord) else {
+            var summary = SearchSummary()
+            summary.invalidPattern = true
+            return SearchResults(files: [], summary: summary)
+        }
+
+        var summary = SearchSummary()
         let fileManager = FileManager.default
 
         let rootIsDirectory = (try? root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         if !rootIsDirectory {
-            let matches = matches(in: root, query: query, caseSensitive: caseSensitive)
-            return matches.isEmpty ? [] : [SearchFileResult(url: root, matches: matches)]
+            let matches = fileMatches(at: root, matcher: matcher)
+            summary.scannedFiles = matches == nil ? 0 : 1
+            let files = (matches?.isEmpty == false) ? [SearchFileResult(url: root, matches: matches!)] : []
+            return SearchResults(files: files, summary: summary)
         }
 
         guard let enumerator = fileManager.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
             options: []
         ) else {
-            return []
+            return SearchResults(files: [], summary: summary)
         }
 
         var results: [SearchFileResult] = []
@@ -60,8 +96,8 @@ enum ProjectSearch {
         while let url = enumerator.nextObject() as? URL {
             if isCancelled() { break }
 
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            if isDirectory {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            if values?.isDirectory ?? false {
                 if ignoredDirectories.contains(url.lastPathComponent) {
                     enumerator.skipDescendants()
                 }
@@ -69,29 +105,59 @@ enum ProjectSearch {
             }
 
             if url.lastPathComponent == ".DS_Store" { continue }
+            if let size = values?.fileSize, size > maxFileSize {
+                summary.skippedLargeFiles += 1
+                continue
+            }
 
-            let fileMatches = matches(in: url, query: query, caseSensitive: caseSensitive)
-            guard !fileMatches.isEmpty else { continue }
+            guard let matches = fileMatches(at: url, matcher: matcher) else { continue }
+            summary.scannedFiles += 1
+            guard !matches.isEmpty else { continue }
 
-            results.append(SearchFileResult(url: url, matches: fileMatches))
-            totalMatches += fileMatches.count
-            if results.count >= maxFiles || totalMatches >= maxMatches { break }
+            results.append(SearchFileResult(url: url, matches: matches))
+            totalMatches += matches.count
+            if results.count >= maxFiles { summary.hitFileLimit = true; break }
+            if totalMatches >= maxMatches { summary.hitMatchLimit = true; break }
         }
 
-        return results
+        return SearchResults(files: results, summary: summary)
+    }
+
+    // MARK: - Matcher construction
+
+    /// Builds the line matcher, or returns `nil` for an invalid regex. Whole-word
+    /// is implemented as a `\b…\b` regex over the escaped literal.
+    private static func makeMatcher(query: String, caseSensitive: Bool, useRegex: Bool, wholeWord: Bool) -> Matcher? {
+        let regexOptions: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
+        if useRegex {
+            guard let regex = try? NSRegularExpression(pattern: query, options: regexOptions) else { return nil }
+            return .regex(regex)
+        }
+        if wholeWord {
+            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: query) + "\\b"
+            if let regex = try? NSRegularExpression(pattern: pattern, options: regexOptions) {
+                return .regex(regex)
+            }
+        }
+        return .substring(query, caseSensitive ? [] : [.caseInsensitive])
     }
 
     // MARK: - Per-file matching
 
-    private static func matches(in url: URL, query: String, caseSensitive: Bool) -> [SearchMatch] {
-        guard let data = try? Data(contentsOf: url),
-              !data.prefix(8000).contains(0) else { return [] }
-        let content = String(decoding: data, as: UTF8.self)
-        return matches(in: content, query: query, caseSensitive: caseSensitive)
+    /// Returns the matches in a file, or `nil` if it's unreadable or binary
+    /// (NUL byte in the first 8 KB). Reads only an 8 KB prefix for the binary
+    /// check before reading the whole file.
+    private static func fileMatches(at url: URL, matcher: Matcher) -> [SearchMatch]? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        let prefix = (try? handle.read(upToCount: 8192)) ?? Data()
+        try? handle.close()
+        if prefix.contains(0) { return nil }
+
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return matches(in: String(decoding: data, as: UTF8.self), matcher: matcher)
     }
 
-    static func matches(in content: String, query: String, caseSensitive: Bool) -> [SearchMatch] {
-        let options: NSString.CompareOptions = caseSensitive ? [] : [.caseInsensitive]
+    private static func matches(in content: String, matcher: Matcher) -> [SearchMatch] {
         let fullString = content as NSString
         var found: [SearchMatch] = []
         var lineNumber = 0
@@ -103,8 +169,17 @@ enum ProjectSearch {
             lineNumber += 1
             guard let line else { return }
             let lineString = line as NSString
-            let columnRange = lineString.range(of: query, options: options)
-            guard columnRange.location != NSNotFound else { return }
+            let columnRange: NSRange
+            switch matcher {
+            case .substring(let query, let options):
+                columnRange = lineString.range(of: query, options: options)
+            case .regex(let regex):
+                columnRange = regex.firstMatch(
+                    in: line,
+                    range: NSRange(location: 0, length: lineString.length)
+                )?.range ?? NSRange(location: NSNotFound, length: 0)
+            }
+            guard columnRange.location != NSNotFound, columnRange.length > 0 else { return }
 
             let absolute = NSRange(
                 location: lineRange.location + columnRange.location,

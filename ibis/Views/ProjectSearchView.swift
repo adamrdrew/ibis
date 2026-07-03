@@ -21,6 +21,8 @@ struct ProjectSearchView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onChange(of: model.query) { _, _ in scheduleSearch() }
         .onChange(of: model.caseSensitive) { _, _ in model.run(root: root) }
+        .onChange(of: model.wholeWord) { _, _ in model.run(root: root) }
+        .onChange(of: model.useRegex) { _, _ in model.run(root: root) }
         .task { isFieldFocused = true }
     }
 
@@ -51,26 +53,67 @@ struct ProjectSearchView: View {
     }
 
     private var optionsBar: some View {
-        HStack {
-            Toggle(isOn: $model.caseSensitive) {
-                Text("Aa")
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Toggle(isOn: $model.caseSensitive) {
+                    Text("Aa")
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Match Case")
+                .accessibilityLabel("Case Sensitive")
+                .accessibilityValue(model.caseSensitive ? "on" : "off")
+
+                Toggle(isOn: $model.wholeWord) {
+                    Image(systemName: "textformat.abc")
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Whole Word")
+                .accessibilityLabel("Whole Word")
+                .accessibilityValue(model.wholeWord ? "on" : "off")
+                .disabled(model.useRegex)
+
+                Toggle(isOn: $model.useRegex) {
+                    Text(".*").monospaced()
+                }
+                .toggleStyle(.button)
+                .controlSize(.small)
+                .help("Regular Expression")
+                .accessibilityLabel("Regular Expression")
+                .accessibilityValue(model.useRegex ? "on" : "off")
+
+                Spacer()
+
+                if !model.results.isEmpty {
+                    Text("\(model.totalMatches) in \(model.results.count) files")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .help("Match Case")
-            .accessibilityLabel("Case Sensitive")
-            .accessibilityValue(model.caseSensitive ? "on" : "off")
 
-            Spacer()
-
-            if !model.results.isEmpty {
-                Text("\(model.totalMatches) in \(model.results.count) files")
+            if model.summary.invalidPattern {
+                Text("Invalid regular expression")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else if model.summary.isLimited {
+                Text("Results limited — refine your search.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .help(limitDetail)
             }
         }
         .padding(.horizontal, 10)
         .padding(.bottom, 6)
+    }
+
+    private var limitDetail: String {
+        let summary = model.summary
+        var parts: [String] = []
+        if summary.hitFileLimit { parts.append("Reached the file limit.") }
+        if summary.hitMatchLimit { parts.append("Reached the match limit.") }
+        if summary.skippedLargeFiles > 0 { parts.append("Skipped \(summary.skippedLargeFiles) large file(s).") }
+        return parts.joined(separator: " ")
     }
 
     @ViewBuilder
