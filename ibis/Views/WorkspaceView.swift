@@ -172,6 +172,17 @@ struct WorkspaceView: View {
                 switch sidebarMode {
                 case .files:
                     FileOutlineView(workspace: workspace, selection: $selection)
+                        .overlay {
+                            if workspace.rootIsEmpty {
+                                ContentUnavailableView {
+                                    Label("Empty Folder", systemImage: "folder")
+                                } description: {
+                                    Text("Create a file with ⌘N, or drop files here.")
+                                }
+                                // Let Finder drops still reach the outline below.
+                                .allowsHitTesting(false)
+                            }
+                        }
                 case .search:
                     ProjectSearchView(
                         model: searchModel,

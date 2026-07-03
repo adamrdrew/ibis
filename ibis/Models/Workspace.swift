@@ -105,6 +105,12 @@ final class Workspace {
         rootURL.lastPathComponent
     }
 
+    /// True when the opened folder has loaded and, after filtering, contains no
+    /// visible children — so the sidebar can show a hint instead of a blank void.
+    var rootIsEmpty: Bool {
+        isDirectory && rootNode.isLoaded && (rootNode.children?.isEmpty ?? false)
+    }
+
     /// Returns the cached document for a URL, creating (but not yet loading) one
     /// on first request.
     func document(for url: URL) -> OpenDocument {
