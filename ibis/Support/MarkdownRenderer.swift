@@ -53,7 +53,8 @@ enum MarkdownRenderer {
     private static let css = """
     :root { color-scheme: light dark; }
     body {
-        font: -apple-system-body, system-ui, sans-serif;
+        font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        font-size: 15px;
         line-height: 1.6;
         margin: 0;
         padding: 28px 36px;
