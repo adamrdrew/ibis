@@ -6,7 +6,11 @@ import Observation
 /// stays in sync. Reads and writes happen off the main actor.
 @Observable
 final class OpenDocument: Identifiable {
-    let url: URL
+    /// Stable identity independent of the URL, so untitled documents (which have
+    /// no URL) still have a distinct tab identity and so a document keeps its
+    /// identity across a Save As that assigns its URL.
+    let id = UUID()
+    private(set) var url: URL?
     var text: String = ""
     var isDirty = false
     var isLoaded = false
@@ -17,16 +21,31 @@ final class OpenDocument: Identifiable {
     /// (used when opening a file from search results). Cleared once applied.
     var pendingSelection: NSRange?
 
-    var id: URL { url }
-    var name: String { url.lastPathComponent }
+    var name: String { url?.lastPathComponent ?? "Untitled" }
+    var isUntitled: Bool { url == nil }
 
     init(url: URL) {
         self.url = url
     }
 
+    /// A new, empty, untitled buffer. Nothing to read from disk, so it's already
+    /// "loaded"; it starts clean and only goes dirty once the user types.
+    init() {
+        self.url = nil
+        self.isLoaded = true
+    }
+
+    /// Assigns a URL in place (used by Save As), keeping the same identity so the
+    /// document's tab and editor view are preserved rather than reopened.
+    func assignURL(_ newURL: URL) {
+        url = newURL
+    }
+
     func loadIfNeeded() async {
-        guard !isLoaded else { return }
-        let fileURL = url
+        guard !isLoaded, let fileURL = url else {
+            isLoaded = true
+            return
+        }
         let outcome = await Task.detached(priority: .userInitiated) {
             OpenDocument.read(fileURL)
         }.value
@@ -43,10 +62,11 @@ final class OpenDocument: Identifiable {
         isLoaded = true
     }
 
+    /// Saves to disk. Returns `false` for an untitled document (no URL yet) —
+    /// the caller must route to Save As — or if the write fails.
     @discardableResult
     func save() async -> Bool {
-        guard !isBinary, loadError == nil else { return false }
-        let fileURL = url
+        guard let fileURL = url, !isBinary, loadError == nil else { return false }
         let contents = text
         let succeeded = await Task.detached(priority: .userInitiated) { () -> Bool in
             do {
@@ -66,7 +86,7 @@ final class OpenDocument: Identifiable {
     /// proceed must be made before the window goes away.
     @discardableResult
     func saveSynchronously() -> Bool {
-        guard !isBinary, loadError == nil else { return false }
+        guard let url, !isBinary, loadError == nil else { return false }
         do {
             try text.write(to: url, atomically: true, encoding: .utf8)
             isDirty = false

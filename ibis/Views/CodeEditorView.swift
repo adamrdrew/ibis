@@ -115,6 +115,13 @@ struct CodeEditorView: NSViewRepresentable {
         if context.coordinator.lastConfiguration != configuration {
             needsHighlight = true
         }
+        // The URL can change under a stable document (Save As of an untitled
+        // buffer), which may change the language — refresh it.
+        let language = Language.highlightName(for: document.url)
+        if context.coordinator.language != language {
+            context.coordinator.language = language
+            needsHighlight = true
+        }
 
         configure(textView, in: scrollView, ruler: ruler)
         syncCoordinator(context.coordinator)

@@ -13,7 +13,7 @@ struct TabBarView: View {
                 ForEach(pane.tabDocuments) { document in
                     TabItemView(
                         document: document,
-                        isCurrent: pane.selectedURL == document.url,
+                        isCurrent: pane.selectedID == document.id,
                         isPaneActive: isPaneActive,
                         onSelect: { onSelect(document) },
                         onClose: { onClose(document) }
@@ -36,7 +36,7 @@ private struct TabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: FileIconProvider.symbolName(forFileURL: document.url))
+            Image(systemName: document.url.map { FileIconProvider.symbolName(forFileURL: $0) } ?? "doc")
                 .foregroundStyle(.secondary)
                 .font(.caption)
 
@@ -60,7 +60,7 @@ private struct TabItemView: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
-        .help(document.url.path(percentEncoded: false))
+        .help(document.url?.path(percentEncoded: false) ?? "Untitled")
     }
 
     @ViewBuilder

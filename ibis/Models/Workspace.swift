@@ -111,39 +111,62 @@ final class Workspace {
         layout.activePane?.selectedDocument
     }
 
-    func saveActiveDocument() async {
-        await activeDocument?.save()
+    /// Opens a new, empty, untitled document as a tab in the active pane.
+    func newUntitledDocument() {
+        let document = OpenDocument()
+        layout.activePane?.open(document)
     }
 
-    /// Writes the active document's text to a new location chosen by the user,
-    /// then opens that file in the active pane.
-    func saveActiveDocumentAs() {
+    func saveActiveDocument() async {
         guard let document = activeDocument else { return }
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = document.url.lastPathComponent
-        panel.directoryURL = document.url.deletingLastPathComponent()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-
-        let text = document.text
-        Task {
-            try? text.write(to: url, atomically: true, encoding: .utf8)
-            let saved = self.document(for: url)
-            await saved.loadIfNeeded()
-            layout.activePane?.open(saved)
+        if document.isUntitled {
+            saveAs(document)
+        } else {
+            await document.save()
         }
     }
 
+    /// Runs a Save panel for a document, writes its text, and assigns the chosen
+    /// URL *in place* — the same document (and its tab / editor) is kept, now
+    /// backed by a file. Caches it and re-highlights via the URL change.
+    /// Returns whether it was saved.
+    @discardableResult
+    func saveAs(_ document: OpenDocument) -> Bool {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = document.name
+        panel.directoryURL = document.url?.deletingLastPathComponent()
+            ?? (isDirectory ? rootURL : rootURL.deletingLastPathComponent())
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+        do {
+            try document.text.write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            return false
+        }
+        document.assignURL(url)
+        document.isDirty = false
+        documentCache[url] = document
+        // Keep the pane's selection on this same document (its id is unchanged).
+        Task { await reloadDirectory(at: url.deletingLastPathComponent()) }
+        return true
+    }
+
+    func saveActiveDocumentAs() {
+        guard let document = activeDocument else { return }
+        saveAs(document)
+    }
+
     func closeActiveTab() {
-        guard let pane = layout.activePane, let url = pane.selectedURL else { return }
-        requestCloseTab(url: url, in: pane)
+        guard let pane = layout.activePane, let document = pane.selectedDocument else { return }
+        requestCloseTab(document, in: pane)
     }
 
     /// Closes a tab, prompting to save first if the document has unsaved changes
     /// and isn't still open in another pane.
-    func requestCloseTab(url: URL, in pane: EditorPane) {
-        guard let document = pane.tabDocuments.first(where: { $0.url == url }) else { return }
+    func requestCloseTab(_ document: OpenDocument, in pane: EditorPane) {
+        guard pane.tabDocuments.contains(where: { $0.id == document.id }) else { return }
 
-        if document.isDirty && !isOpenElsewhere(url: url, excluding: pane) {
+        if document.isDirty && !isOpenElsewhere(document, excluding: pane) {
             switch confirmSave(
                 message: "Do you want to save the changes you made to “\(document.name)”?",
                 informative: "Your changes will be lost if you don’t save them."
@@ -151,32 +174,38 @@ final class Workspace {
             case .cancel:
                 return
             case .discard:
-                discardDocument(url)
+                discardDocument(document)
             case .save:
-                Task {
-                    if await document.save() { self.closeTab(url, in: pane) }
+                if document.isUntitled {
+                    if saveAs(document) { closeTab(document, in: pane) }
+                } else {
+                    Task {
+                        if await document.save() { self.closeTab(document, in: pane) }
+                    }
                 }
                 return
             }
         }
-        closeTab(url, in: pane)
+        closeTab(document, in: pane)
     }
 
-    private func closeTab(_ url: URL, in pane: EditorPane) {
-        pane.close(url)
+    private func closeTab(_ document: OpenDocument, in pane: EditorPane) {
+        pane.close(document)
         if pane.tabDocuments.isEmpty && layout.panes.count > 1 {
             layout.closePane(pane.id)
         }
     }
 
-    private func isOpenElsewhere(url: URL, excluding pane: EditorPane) -> Bool {
-        layout.panes.contains { $0.id != pane.id && $0.tabDocuments.contains { $0.url == url } }
+    private func isOpenElsewhere(_ document: OpenDocument, excluding pane: EditorPane) -> Bool {
+        layout.panes.contains { $0.id != pane.id && $0.tabDocuments.contains { $0.id == document.id } }
     }
 
     /// Drops a document's buffer so its unsaved edits are truly discarded; a
-    /// later reopen reads fresh from disk.
-    private func discardDocument(_ url: URL) {
-        documentCache.removeValue(forKey: url)
+    /// later reopen reads fresh from disk. Untitled buffers just vanish.
+    private func discardDocument(_ document: OpenDocument) {
+        if let url = document.url {
+            documentCache.removeValue(forKey: url)
+        }
     }
 
     func splitActiveEditor() {
@@ -187,11 +216,11 @@ final class Workspace {
     func selectAdjacentTab(offset: Int) {
         guard let pane = layout.activePane,
               !pane.tabDocuments.isEmpty,
-              let current = pane.tabDocuments.firstIndex(where: { $0.url == pane.selectedURL })
+              let current = pane.tabDocuments.firstIndex(where: { $0.id == pane.selectedID })
         else { return }
         let count = pane.tabDocuments.count
         let next = (current + offset + count) % count
-        pane.selectedURL = pane.tabDocuments[next].url
+        pane.selectedID = pane.tabDocuments[next].id
     }
 
     func revealActiveInFinder() {
@@ -232,11 +261,11 @@ final class Workspace {
 
     /// Distinct documents with unsaved edits that are currently open in a tab.
     var dirtyDocuments: [OpenDocument] {
-        var seen = Set<URL>()
+        var seen = Set<OpenDocument.ID>()
         var result: [OpenDocument] = []
         for pane in layout.panes {
-            for document in pane.tabDocuments where document.isDirty && !seen.contains(document.url) {
-                seen.insert(document.url)
+            for document in pane.tabDocuments where document.isDirty && !seen.contains(document.id) {
+                seen.insert(document.id)
                 result.append(document)
             }
         }
@@ -258,7 +287,13 @@ final class Workspace {
         case .discard:
             return true
         case .save:
-            for document in dirty { document.saveSynchronously() }
+            for document in dirty {
+                if document.isUntitled {
+                    _ = saveAs(document)
+                } else {
+                    document.saveSynchronously()
+                }
+            }
             return true
         }
     }

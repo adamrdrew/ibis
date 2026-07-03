@@ -4,7 +4,8 @@ import Foundation
 /// don't recognize, in which case the editor leaves the text unstyled rather
 /// than risk a slow or wrong auto-detection.
 enum Language {
-    static func highlightName(for url: URL) -> String? {
+    static func highlightName(for url: URL?) -> String? {
+        guard let url else { return nil }
         switch url.lastPathComponent.lowercased() {
         case "dockerfile": return "dockerfile"
         case "makefile", "gnumakefile": return "makefile"

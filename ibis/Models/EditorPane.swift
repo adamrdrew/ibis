@@ -7,28 +7,30 @@ import Observation
 final class EditorPane: Identifiable {
     let id = UUID()
     var tabDocuments: [OpenDocument] = []
-    var selectedURL: URL?
+    /// The selected tab, identified by document id (not URL) so untitled
+    /// documents select correctly.
+    var selectedID: OpenDocument.ID?
 
     var selectedDocument: OpenDocument? {
-        tabDocuments.first { $0.url == selectedURL }
+        tabDocuments.first { $0.id == selectedID }
     }
 
     /// Opens a document as a tab (or focuses it if already open).
     func open(_ document: OpenDocument) {
-        if !tabDocuments.contains(where: { $0.url == document.url }) {
+        if !tabDocuments.contains(where: { $0.id == document.id }) {
             tabDocuments.append(document)
         }
-        selectedURL = document.url
+        selectedID = document.id
     }
 
-    /// Closes the tab for a URL, selecting a sensible neighbor.
-    func close(_ url: URL) {
-        guard let index = tabDocuments.firstIndex(where: { $0.url == url }) else { return }
+    /// Closes a document's tab, selecting a sensible neighbor.
+    func close(_ document: OpenDocument) {
+        guard let index = tabDocuments.firstIndex(where: { $0.id == document.id }) else { return }
         tabDocuments.remove(at: index)
-        if selectedURL == url {
-            selectedURL = tabDocuments.isEmpty
+        if selectedID == document.id {
+            selectedID = tabDocuments.isEmpty
                 ? nil
-                : tabDocuments[min(index, tabDocuments.count - 1)].url
+                : tabDocuments[min(index, tabDocuments.count - 1)].id
         }
     }
 }

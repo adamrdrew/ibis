@@ -5,7 +5,7 @@ struct EditorPaneView: View {
     @Bindable var pane: EditorPane
     let layout: EditorLayout
     let configuration: EditorConfiguration
-    var onCloseTab: (URL, EditorPane) -> Void
+    var onCloseTab: (OpenDocument, EditorPane) -> Void
 
     private var isActive: Bool { layout.activePaneID == pane.id }
     private var hasMultiplePanes: Bool { layout.panes.count > 1 }
@@ -33,11 +33,11 @@ struct EditorPaneView: View {
                 pane: pane,
                 isPaneActive: isActive,
                 onSelect: { document in
-                    pane.selectedURL = document.url
+                    pane.selectedID = document.id
                     layout.activePaneID = pane.id
                 },
                 onClose: { document in
-                    onCloseTab(document.url, pane)
+                    onCloseTab(document, pane)
                 }
             )
 

@@ -4,7 +4,7 @@ import SwiftUI
 struct EditorAreaView: View {
     @Bindable var layout: EditorLayout
     let configuration: EditorConfiguration
-    var onCloseTab: (URL, EditorPane) -> Void
+    var onCloseTab: (OpenDocument, EditorPane) -> Void
 
     var body: some View {
         HSplitView {

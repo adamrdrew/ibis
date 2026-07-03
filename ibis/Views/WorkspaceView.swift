@@ -251,7 +251,7 @@ struct WorkspaceView: View {
         EditorAreaView(
             layout: workspace.layout,
             configuration: editorConfiguration,
-            onCloseTab: { url, pane in workspace.requestCloseTab(url: url, in: pane) }
+            onCloseTab: { document, pane in workspace.requestCloseTab(document, in: pane) }
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

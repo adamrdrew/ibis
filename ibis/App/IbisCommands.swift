@@ -22,10 +22,19 @@ struct IbisCommands: Commands {
     var body: some Commands {
         // MARK: File
         CommandGroup(replacing: .newItem) {
+            Button("New File") {
+                if let workspace {
+                    workspace.newUntitledDocument()
+                } else {
+                    openWindow(id: welcomeWindowID)
+                }
+            }
+            .keyboardShortcut("n")
+
             Button("New Window") {
                 openWindow(id: welcomeWindowID)
             }
-            .keyboardShortcut("n")
+            .keyboardShortcut("n", modifiers: [.command, .shift])
 
             Divider()
 
