@@ -17,6 +17,7 @@ struct WorkspaceView: View {
     @State private var selection: FileNode.ID?
     @State private var sidebarMode: SidebarMode = .files
     @State private var searchModel = ProjectSearchModel()
+    @State private var goToLineText = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,6 +104,17 @@ struct WorkspaceView: View {
         // work whenever the window is active, even with no editor focused.
         .focusedSceneValue(\.activeWorkspace, workspace)
         .focusedSceneValue(\.sidebarMode, $sidebarMode)
+        // Go to Line prompt (⌘L), driven by the workspace's request flag.
+        .alert("Go to Line", isPresented: goToLinePresented) {
+            TextField("Line number", text: $goToLineText)
+            Button("Go") {
+                if let line = Int(goToLineText.trimmingCharacters(in: .whitespaces)) {
+                    workspace?.goToLine(line)
+                }
+                goToLineText = ""
+            }
+            Button("Cancel", role: .cancel) { goToLineText = "" }
+        }
         .task(id: ref) {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
@@ -158,6 +170,13 @@ struct WorkspaceView: View {
 
     private var activeDocument: OpenDocument? {
         workspace?.layout.activePane?.selectedDocument
+    }
+
+    private var goToLinePresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.goToLineRequested ?? false },
+            set: { workspace?.goToLineRequested = $0 }
+        )
     }
 
     /// The persisted terminal dock size, as `CGFloat` bindings for the resize

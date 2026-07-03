@@ -117,6 +117,10 @@ struct IbisCommands: Commands {
             Button("Close Tab") { workspace?.closeActiveTab() }
                 .disabled(workspace?.activeDocument == nil)
 
+            Button("Go to Line…") { workspace?.goToLineRequested = true }
+                .keyboardShortcut("l")
+                .disabled(workspace?.activeDocument == nil)
+
             Divider()
 
             Button("Find in Folder…") { sidebarMode?.wrappedValue = .search }

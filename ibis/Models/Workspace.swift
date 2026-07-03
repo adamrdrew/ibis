@@ -122,6 +122,28 @@ final class Workspace {
         layout.activePane?.selectedDocument
     }
 
+    /// Set by the Go to Line command to trigger the prompt in the editor UI.
+    var goToLineRequested = false
+
+    /// Selects and reveals the given 1-based line in the active document, reusing
+    /// the same `pendingSelection` mechanism as opening a search result.
+    func goToLine(_ requested: Int) {
+        guard let document = activeDocument else { return }
+        let ns = document.text as NSString
+        guard ns.length > 0 else {
+            document.pendingSelection = NSRange(location: 0, length: 0)
+            return
+        }
+        let target = max(1, requested)
+        var line = 1
+        var loc = 0
+        while line < target && loc < ns.length {
+            loc = NSMaxRange(ns.lineRange(for: NSRange(location: loc, length: 0)))
+            line += 1
+        }
+        document.pendingSelection = ns.lineRange(for: NSRange(location: min(loc, ns.length - 1), length: 0))
+    }
+
     /// Opens a new, empty, untitled document as a tab in the active pane.
     func newUntitledDocument() {
         let document = OpenDocument()
