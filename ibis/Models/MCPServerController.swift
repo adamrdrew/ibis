@@ -21,6 +21,15 @@ final class IbisMCPServer {
         try await MCPBridge.shared.openFile(token: await projectToken(), path: path, line: line)
     }
 
+    /// Propose an edit to a file and wait for the human to review it. Send the
+    /// full intended new content; Ibis shows the human a diff against the current
+    /// file and, only if they approve, applies and saves it. Returns whether the
+    /// human applied or declined.
+    @MCPTool(name: "propose_edit")
+    func proposeEdit(path: String, newContent: String) async throws -> String {
+        try await MCPBridge.shared.proposeEdit(token: await projectToken(), path: path, newContent: newContent)
+    }
+
     /// Reveal a file in this agent's file browser (expand to it and select it).
     /// The path may be absolute or relative to the workspace root.
     @MCPTool(name: "reveal_in_tree")

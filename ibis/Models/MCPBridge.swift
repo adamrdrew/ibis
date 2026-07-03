@@ -111,6 +111,30 @@ final class MCPBridge {
         return "Opened \(url.lastPathComponent) in Ibis."
     }
 
+    /// Shows the human a diff of `newContent` vs the current file and waits for
+    /// their decision, applying it (buffer + save) only if approved.
+    func proposeEdit(token: String?, path: String, newContent: String) async throws -> String {
+        let workspace = try workspace(for: token)
+        let url = resolve(path, in: workspace)
+
+        let before = workspace.openedDocument(for: url)?.text
+            ?? (try? String(contentsOf: url, encoding: .utf8))
+            ?? ""
+        guard let proposal = LineDiff.proposal(fileURL: url, before: before, after: newContent) else {
+            return "No changes to \(url.lastPathComponent) — the proposed content matches the current file."
+        }
+        guard workspace.pendingDiff == nil else {
+            throw MCPToolFailure("A diff review is already open in this window; resolve it first.")
+        }
+
+        let approved = await workspace.awaitDiffDecision(proposal)
+        if approved {
+            await workspace.applyProposedEdit(url: url, content: newContent)
+            return "Applied changes to \(url.lastPathComponent) (+\(proposal.added) −\(proposal.removed))."
+        }
+        return "The human declined the changes to \(url.lastPathComponent)."
+    }
+
     func revealInTree(token: String?, path: String) throws -> String {
         let workspace = try workspace(for: token)
         let url = resolve(path, in: workspace)

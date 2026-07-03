@@ -34,6 +34,45 @@ final class Workspace {
         onRevealInTree?(url)
     }
 
+    /// An agent-proposed edit awaiting the human's review (MCP `propose_edit`).
+    /// WorkspaceView presents a diff sheet while this is set.
+    var pendingDiff: DiffProposal?
+
+    /// Resumed with the human's decision when the diff sheet is dismissed.
+    @ObservationIgnored private var pendingDiffDecision: CheckedContinuation<Bool, Never>?
+
+    /// Presents `proposal` and suspends until the human applies or discards it.
+    func awaitDiffDecision(_ proposal: DiffProposal) async -> Bool {
+        await withCheckedContinuation { continuation in
+            pendingDiffDecision = continuation
+            pendingDiff = proposal
+        }
+    }
+
+    /// Resolves the pending diff review (from the sheet buttons or on close).
+    func resolvePendingDiff(apply: Bool) {
+        guard let continuation = pendingDiffDecision else { return }
+        pendingDiffDecision = nil
+        pendingDiff = nil
+        continuation.resume(returning: apply)
+    }
+
+    /// Applies approved content to the file: into the open buffer (so the editor
+    /// shows it and undo works), then saved to disk.
+    func applyProposedEdit(url: URL, content: String) async {
+        let document = document(for: url)
+        await document.loadIfNeeded()
+        document.text = content
+        document.isDirty = true
+        layout.activePane?.open(document)
+        await document.save()
+    }
+
+    /// The already-open document for a URL, if any (without creating one).
+    func openedDocument(for url: URL) -> OpenDocument? {
+        documentCache[url]
+    }
+
     /// The hosting window, so unsaved-changes confirmations can attach as sheets.
     /// `@ObservationIgnored` because it's assigned from a view-backing
     /// representable during the update pass; observing it would risk a

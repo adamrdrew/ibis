@@ -143,7 +143,22 @@ struct WorkspaceView: View {
         // Start/stop the MCP server to match settings (idempotent), and let
         // agent tools address this window.
         .task { MCPService.apply(settings: settings) }
-        .onDisappear { if let workspace { MCPBridge.shared.unregister(workspace) } }
+        .onDisappear {
+            if let workspace {
+                workspace.resolvePendingDiff(apply: false)
+                MCPBridge.shared.unregister(workspace)
+            }
+        }
+        // Agent-proposed edit review (MCP propose_edit); dismiss = discard.
+        .sheet(isPresented: diffReviewPresented) {
+            if let proposal = workspace?.pendingDiff {
+                DiffReviewView(
+                    proposal: proposal,
+                    onApply: { workspace?.resolvePendingDiff(apply: true) },
+                    onDiscard: { workspace?.resolvePendingDiff(apply: false) }
+                )
+            }
+        }
         .task(id: ref) {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             self.workspace = workspace
@@ -228,6 +243,16 @@ struct WorkspaceView: View {
         Binding(
             get: { workspace?.goToLineRequested ?? false },
             set: { workspace?.goToLineRequested = $0 }
+        )
+    }
+
+    private var diffReviewPresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.pendingDiff != nil },
+            set: { presented in
+                // Dismissed without a button (Esc / click-away) → discard.
+                if !presented { workspace?.resolvePendingDiff(apply: false) }
+            }
         )
     }
 
