@@ -3,8 +3,9 @@
 A lightweight, folder-oriented macOS code editor (not an IDE): open files/folders,
 browse a hierarchical file tree, edit in tabs and resizable split panes, syntax
 highlighting, project search, an integrated terminal (tabs + one-key launch of a
-configured agent), and a live Git status bar. **No** run/debug, LSP, or plugin
-marketplace.
+configured agent), and a live Git status bar. Opens from Finder, the `ibis` CLI,
+the Services menu, and Shortcuts/Siri App Intents; confirms unsaved changes on
+close. **No** run/debug, LSP, or plugin marketplace.
 
 - **Platform:** macOS only, deployment target **macOS 27**, SwiftUI + AppKit.
 - **Hero color:** kelly green (`Color.ibisKelly`), used sparingly for accents.
@@ -25,17 +26,23 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
 
 ## Architecture (all sources under `ibis/`)
 
-- **App/** — `IbisApp` (`@main`; a compact non-resizable `Window` launcher scene
-  + a `WindowGroup(for: WorkspaceRef)` for editor windows at a 4:3 `defaultSize`
-  + `Settings`), `AppDelegate` (Finder/CLI opens via `LaunchRouter`), `IbisCommands`
-  (full menu bar, targets the frontmost window via focused scene values),
-  `FocusedValues`.
+- **App/** — `IbisApp` (`@main`; four scenes: a compact non-resizable `Window`
+  launcher, a `WindowGroup(for: WorkspaceRef)` for editor windows at a 4:3
+  `defaultSize`, a content-sized "Keyboard Shortcuts" `Window`, and `Settings`),
+  `AppDelegate` (Finder/CLI opens via `LaunchRouter`; also the "Open in Ibis"
+  Services provider), `IbisCommands` (full menu bar, targets the frontmost window
+  via focused scene values), `FocusedValues`, `LaunchRouter` (open hand-off; an
+  optional `runAgent` flag, consumed once, launches the agent on open),
+  `OpenPathIntent`/`OpenInAgentIntent` (App Intents), `IbisShortcuts`
+  (`AppShortcutsProvider`).
 - **Models/** — `@Observable`, `@MainActor`. `Workspace` (root, file tree, pane
-  layout, file ops, FSEvents, `terminal` dock, `git` status), `FileNode` (lazy tree
-  node), `EditorPane`/`EditorLayout`, `OpenDocument`, `AppSettings`
-  (UserDefaults-backed), `ProjectSearchModel`, `WorkspaceRef`, `WorkspaceFileEntity`
-  (App Intents), `TerminalDock`/`TerminalSession` (integrated terminal; mirror the
-  pane/tab model), `GitStatusModel` (shells out to `git`).
+  layout, file ops, FSEvents, `terminal` dock, `git` status, unsaved-change
+  prompts), `FileNode` (lazy tree node), `EditorPane`/`EditorLayout`,
+  `OpenDocument`, `AppSettings` (UserDefaults-backed), `ProjectSearchModel`,
+  `WorkspaceRef`, `WorkspaceFileEntity` (App Intents), `TerminalDock`/
+  `TerminalSession` (integrated terminal; mirror the pane/tab model),
+  `GitStatusModel` (shells out to `git`), `WorkspaceStateStore` (per-root tab/pane
+  restoration snapshot in UserDefaults).
 - **FileSystem/** — `FileTreeLoader`, `FileSystemWatcher` (FSEvents),
   `FileOperations`, `SecurityScopedAccess`.
 - **Syntax/** — `Language` (ext → highlight.js name), `SyntaxHighlighter`
@@ -46,9 +53,12 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
   (NSOutlineView-backed browser), `CodeEditorView` + `LineNumberRulerView`
   (NSTextView editor), `EditorAreaView`/`EditorPaneView`/`TabBarView`,
   `TerminalDockView`/`TerminalSessionView`/`TerminalTabBarView` (SwiftTerm-backed),
-  `StatusBarView`, `ProjectSearchView`, `SettingsView`, `WelcomeView` (the launcher).
+  `StatusBarView`, `ProjectSearchView`, `SettingsView`, `WelcomeView` (the launcher),
+  `ShortcutsHelpView` (Help ▸ Keyboard Shortcuts).
 - **Support/** — `EditorChrome`, `Color+Ibis`, `FileIconProvider`,
-  `ShellResolver` (login shell + environment for the terminal).
+  `ShellResolver` (login shell + environment for the terminal), `WindowCloseGuard`
+  (window-close confirmation, see gotcha), `SharePresenter` (holds an
+  `NSSharingServicePicker` alive during presentation).
 
 ## Critical gotchas & hard-won lessons
 
@@ -58,6 +68,21 @@ needed (bundle id, entitlements, platforms, packages), give the user precise
 steps to change it in Xcode and stop. New source files/assets are picked up
 automatically (the target uses a `PBXFileSystemSynchronizedRootGroup`), so just
 write them under `ibis/`.
+
+**Info.plist is a real, merged file.** `INFOPLIST_FILE = ibis/Info.plist` with
+`GENERATE_INFOPLIST_FILE = YES` — Xcode uses the file as the base and merges the
+`INFOPLIST_KEY_*` generated keys on top, so the file only holds what codegen can't
+express: `CFBundleDocumentTypes` (folder + text/source/data), the `NSServices`
+"Open in Ibis" entry, and Sparkle keys. Traps: the service's `NSPortName` must
+equal `CFBundleName` (`ibis`, lowercase) or the menu item appears but does nothing;
+Services registration is cached, so a new item needs `pbs -flush` or a launch of
+the built app to show up. The Sparkle keys (`SUFeedURL`, `SUPublicEDKey`) are
+**placeholders** — the Sparkle package isn't wired up yet.
+
+**"Open in Ibis" Service:** declared in `NSServices` (above) + handled by
+`AppDelegate.openInIbis(_:userData:error:)`, registered via
+`NSApp.servicesProvider = self`. It reads file URLs off the pasteboard and routes
+them through `LaunchRouter`, same as Finder/CLI/App-Intent opens.
 
 **Line-number gutter (`LineNumberRulerView`):** draw via
 `drawHashMarksAndLabels(in:)`, **never** override `NSView.draw(_:)` — the number
@@ -104,10 +129,13 @@ launcher (`WelcomeView`, `windowResizability(.contentSize)`, fixed-width content
 `restorationBehavior(.disabled)`) is the primary scene, so it opens on a plain
 launch; it dismisses itself (`@Environment(\.dismiss)`) when a file/folder opens
 and drains the `LaunchRouter` for CLI/Finder opens. Editor windows come from the
-`WindowGroup(for: WorkspaceRef)` with a 4:3 `defaultSize`. Restoration is native
-`WindowGroup(for:)` scene restoration (respects the system "Close windows when
-quitting" setting) — no bespoke session store, and no security-scoped bookmarks
-needed now that the app is unsandboxed. `File ▸ New Window` opens the launcher.
+`WindowGroup(for: WorkspaceRef)` with a 4:3 `defaultSize`. *Window* restoration is
+native `WindowGroup(for:)` scene restoration (respects the system "Close windows
+when quitting" setting); no security-scoped bookmarks needed now that the app is
+unsandboxed. On top of that, `WorkspaceStateStore` persists each root's **tab/pane
+layout + selection** (keyed by root path in UserDefaults, capped to 20 roots) so a
+reopened folder restores its editors — the window frame is native, the contents
+are this store. `File ▸ New Window` opens the launcher.
 
 **Integrated terminal (SwiftTerm):** each `TerminalSession` owns a
 `LocalProcessTerminalView` that forks the user's login shell in a PTY
@@ -147,6 +175,17 @@ every window-targeting command (Show Terminal, Save As, Split, …) greyed out.
 `WorkspaceView` publishes `activeWorkspace`/`sidebarMode` via `.focusedSceneValue`
 so they resolve whenever the window is frontmost, regardless of inner focus.
 (Read side is still `@FocusedValue` in `IbisCommands`.)
+
+**Unsaved-changes confirmation on close.** Tab close routes through
+`Workspace.requestCloseTab` (skips the prompt if the file is still open in another
+pane). Window close is the hard part: SwiftUI exposes no "window will close" hook,
+so `WindowCloseGuard` (an `NSViewRepresentable` in the window background) installs
+an **`NSWindowDelegate` proxy** on the host window that implements
+`windowShouldClose` and **forwards every other delegate method to SwiftUI's own
+delegate** (`forwardingTarget(for:)` + `responds(to:)`), so scene management isn't
+disturbed. It can veto the close and re-issue it (via a `proceed` closure /
+`performClose`) once the confirmation resolves. Don't just replace `window.delegate`
+outright — you'll break SwiftUI window handling.
 
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
