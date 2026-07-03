@@ -228,8 +228,35 @@ struct FileOutlineView: NSViewRepresentable {
 
         // MARK: Drag & drop
 
+        /// The folder a spring-load expand is pending for, and its timer.
+        private var springItem: FileNode?
+        private var springWorkItem: DispatchWorkItem?
+
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
             (item as? FileNode)?.url as NSURL?
+        }
+
+        /// Schedules (or cancels) an auto-expand for a collapsed folder hovered
+        /// during a drag, Finder-style.
+        private func scheduleSpring(for node: FileNode?, in outlineView: NSOutlineView) {
+            guard let node, node.isDirectory, !outlineView.isItemExpanded(node) else {
+                cancelSpring()
+                return
+            }
+            if node === springItem { return } // already pending for this folder
+            springWorkItem?.cancel()
+            springItem = node
+            let work = DispatchWorkItem { [weak outlineView] in
+                outlineView?.animator().expandItem(node)
+            }
+            springWorkItem = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.65, execute: work)
+        }
+
+        func cancelSpring() {
+            springWorkItem?.cancel()
+            springWorkItem = nil
+            springItem = nil
         }
 
         func outlineView(
@@ -241,6 +268,9 @@ struct FileOutlineView: NSViewRepresentable {
             // Only drop onto directories (or the root when item is nil).
             if let node = item as? FileNode, !node.isDirectory { return [] }
             outlineView.setDropItem(item, dropChildIndex: NSOutlineViewDropOnItemIndex)
+
+            // Spring-load: hovering a collapsed folder during a drag expands it.
+            scheduleSpring(for: item as? FileNode, in: outlineView)
 
             let optionHeld = info.draggingSourceOperationMask == .copy
             let isInternal = (info.draggingSource as? NSOutlineView) === outlineView
@@ -259,6 +289,8 @@ struct FileOutlineView: NSViewRepresentable {
             let targetDirectory = (item as? FileNode)?.url ?? workspace.rootURL
             guard let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
                   !urls.isEmpty else { return false }
+
+            cancelSpring()
 
             let isInternal = (info.draggingSource as? NSOutlineView) === outlineView
             let optionHeld = info.draggingSourceOperationMask == .copy
@@ -537,6 +569,11 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
             return
         }
         super.keyDown(with: event)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        coordinator?.cancelSpring()
+        super.draggingExited(sender)
     }
 
     // MARK: - Quick Look panel control
