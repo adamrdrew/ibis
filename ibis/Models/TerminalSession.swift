@@ -12,6 +12,12 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     let id = UUID()
     let workingDirectory: URL
 
+    /// A specific command to run as a login shell (e.g. an agent), or nil for a
+    /// plain interactive shell.
+    let command: String?
+    /// Fallback tab title (before/without a title escape sequence).
+    private let defaultTitle: String
+
     /// Shown in the tab; updated live from the shell's title escape sequences.
     var title: String
     /// False once the shell process exits (until restarted).
@@ -23,9 +29,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// built lazily the first time the tab is shown.
     @ObservationIgnored private(set) var terminalView: LocalProcessTerminalView?
 
-    init(workingDirectory: URL) {
+    init(workingDirectory: URL, command: String? = nil, title: String? = nil) {
         self.workingDirectory = workingDirectory
-        self.title = workingDirectory.lastPathComponent
+        self.command = command
+        self.defaultTitle = title ?? workingDirectory.lastPathComponent
+        self.title = self.defaultTitle
     }
 
     /// Returns the terminal view, creating it and starting the shell on first
@@ -61,11 +69,14 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
     private func startShell(shellOverride: String?, on view: LocalProcessTerminalView) {
         let shell = ShellResolver.resolve(override: shellOverride)
-        title = workingDirectory.lastPathComponent
+        title = defaultTitle
         exitCode = nil
+        // For an agent, run it through a login shell (`-l -c`) so it inherits
+        // the user's PATH; otherwise launch a normal interactive login shell.
+        let args = command.map { ["-l", "-c", $0] } ?? shell.args
         view.startProcess(
             executable: shell.executable,
-            args: shell.args,
+            args: args,
             environment: ShellResolver.environment(),
             execName: shell.execName,
             currentDirectory: workingDirectory.path(percentEncoded: false)

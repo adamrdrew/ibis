@@ -121,16 +121,33 @@ struct IbisCommands: Commands {
 
             Divider()
 
+            Button("Open in \(settings.agentName)") { runAgent() }
+                .keyboardShortcut("a", modifiers: [.control, .shift])
+                .disabled(workspace == nil || settings.agentCommandLine == nil)
+
+            Divider()
+
             Button("Show Next Terminal") { workspace?.selectAdjacentTerminal(offset: 1) }
                 .keyboardShortcut("]", modifiers: [.control, .shift])
                 .disabled(workspace?.terminal.activeSessionID == nil)
             Button("Show Previous Terminal") { workspace?.selectAdjacentTerminal(offset: -1) }
                 .keyboardShortcut("[", modifiers: [.control, .shift])
                 .disabled(workspace?.terminal.activeSessionID == nil)
+
+            Divider()
+
+            Button(settings.terminalPlacement == .bottom ? "Move Terminal to the Right" : "Move Terminal to the Bottom") {
+                settings.terminalPlacement = settings.terminalPlacement == .bottom ? .trailing : .bottom
+            }
         }
     }
 
     // MARK: - Helpers
+
+    private func runAgent() {
+        guard let workspace, let command = settings.agentCommandLine else { return }
+        workspace.runAgent(command: command, name: settings.agentName)
+    }
 
     private func boolBinding(_ keyPath: ReferenceWritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
         Binding(

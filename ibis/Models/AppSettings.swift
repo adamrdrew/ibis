@@ -1,6 +1,12 @@
 import SwiftUI
 import Observation
 
+/// Where the integrated terminal dock sits relative to the editor.
+enum TerminalPlacement: String, CaseIterable {
+    case bottom
+    case trailing
+}
+
 /// User-configurable editor and appearance settings, shared across all windows
 /// through the environment and persisted to `UserDefaults`.
 @Observable
@@ -23,8 +29,30 @@ final class AppSettings {
     var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: Key.terminalFontSize) } }
     /// Optional shell override; empty means use the user's login shell.
     var terminalShellPath: String { didSet { defaults.set(terminalShellPath, forKey: Key.terminalShellPath) } }
-    /// Remembered height of the bottom terminal dock.
+    /// Remembered size of the terminal dock (height when at the bottom, width
+    /// when trailing).
     var terminalDockHeight: Double { didSet { defaults.set(terminalDockHeight, forKey: Key.terminalDockHeight) } }
+    var terminalDockWidth: Double { didSet { defaults.set(terminalDockWidth, forKey: Key.terminalDockWidth) } }
+    /// Whether the terminal dock sits at the bottom or along the trailing edge.
+    var terminalPlacement: TerminalPlacement {
+        didSet { defaults.set(terminalPlacement.rawValue, forKey: Key.terminalPlacement) }
+    }
+
+    // MARK: Agent
+
+    /// A configurable command-line agent (e.g. `claude`, `codex`) launched in a
+    /// terminal by the "Open in Agent" action.
+    var agentName: String { didSet { defaults.set(agentName, forKey: Key.agentName) } }
+    var agentCommand: String { didSet { defaults.set(agentCommand, forKey: Key.agentCommand) } }
+    var agentArgs: String { didSet { defaults.set(agentArgs, forKey: Key.agentArgs) } }
+
+    /// The shell-ready command line for the configured agent, or nil if unset.
+    var agentCommandLine: String? {
+        let command = agentCommand.trimmingCharacters(in: .whitespaces)
+        guard !command.isEmpty else { return nil }
+        let args = agentArgs.trimmingCharacters(in: .whitespaces)
+        return args.isEmpty ? command : "\(command) \(args)"
+    }
 
     // Not yet surfaced in the UI; kept for the editor configuration.
     var lineSpacing: Double = 2
@@ -48,6 +76,12 @@ final class AppSettings {
         terminalFontSize = defaults.object(forKey: Key.terminalFontSize) as? Double ?? 13
         terminalShellPath = defaults.string(forKey: Key.terminalShellPath) ?? ""
         terminalDockHeight = defaults.object(forKey: Key.terminalDockHeight) as? Double ?? 240
+        terminalDockWidth = defaults.object(forKey: Key.terminalDockWidth) as? Double ?? 480
+        terminalPlacement = defaults.string(forKey: Key.terminalPlacement)
+            .flatMap(TerminalPlacement.init) ?? .bottom
+        agentName = defaults.string(forKey: Key.agentName) ?? "Claude"
+        agentCommand = defaults.string(forKey: Key.agentCommand) ?? "claude"
+        agentArgs = defaults.string(forKey: Key.agentArgs) ?? ""
     }
 
     private enum Key {
@@ -63,5 +97,10 @@ final class AppSettings {
         static let terminalFontSize = "terminal.fontSize"
         static let terminalShellPath = "terminal.shellPath"
         static let terminalDockHeight = "terminal.dockHeight"
+        static let terminalDockWidth = "terminal.dockWidth"
+        static let terminalPlacement = "terminal.placement"
+        static let agentName = "agent.name"
+        static let agentCommand = "agent.command"
+        static let agentArgs = "agent.args"
     }
 }

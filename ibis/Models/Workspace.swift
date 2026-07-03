@@ -180,4 +180,11 @@ final class Workspace {
     func selectAdjacentTerminal(offset: Int) {
         terminal.selectAdjacent(offset: offset)
     }
+
+    /// Reveals the terminal dock and launches the configured agent in a fresh
+    /// terminal tab, rooted at the workspace.
+    func runAgent(command: String, name: String) {
+        terminal.newSession(command: command, title: name)
+        terminal.isVisible = true
+    }
 }

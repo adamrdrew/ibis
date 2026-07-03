@@ -41,9 +41,17 @@ struct TerminalDockView: View {
             .help("New Terminal")
 
             Button {
+                settings.terminalPlacement = settings.terminalPlacement == .bottom ? .trailing : .bottom
+            } label: {
+                Image(systemName: settings.terminalPlacement == .bottom ? "rectangle.split.2x1" : "rectangle.split.1x2")
+            }
+            .buttonStyle(.plain)
+            .help(settings.terminalPlacement == .bottom ? "Move Terminal to the Right" : "Move Terminal to the Bottom")
+
+            Button {
                 dock.isVisible = false
             } label: {
-                Image(systemName: "chevron.down")
+                Image(systemName: settings.terminalPlacement == .bottom ? "chevron.down" : "chevron.right")
             }
             .buttonStyle(.plain)
             .help("Hide Terminal")

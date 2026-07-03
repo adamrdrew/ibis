@@ -22,10 +22,11 @@ final class TerminalDock {
         sessions.first { $0.id == activeSessionID } ?? sessions.first
     }
 
-    /// Creates a new terminal tab rooted at the workspace and focuses it.
+    /// Creates a new terminal tab rooted at the workspace and focuses it. Pass a
+    /// `command` (and `title`) to run something specific, e.g. an agent.
     @discardableResult
-    func newSession() -> TerminalSession {
-        let session = TerminalSession(workingDirectory: workingDirectory)
+    func newSession(command: String? = nil, title: String? = nil) -> TerminalSession {
+        let session = TerminalSession(workingDirectory: workingDirectory, command: command, title: title)
         sessions.append(session)
         activeSessionID = session.id
         return session

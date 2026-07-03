@@ -94,6 +94,14 @@ private struct TerminalSettingsView: View {
     var body: some View {
         @Bindable var settings = settings
         Form {
+            Section("Layout") {
+                Picker("Position", selection: $settings.terminalPlacement) {
+                    Text("Bottom").tag(TerminalPlacement.bottom)
+                    Text("Right").tag(TerminalPlacement.trailing)
+                }
+                .pickerStyle(.segmented)
+            }
+
             Section("Font") {
                 Picker("Typeface", selection: $settings.terminalFontName) {
                     ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
@@ -103,6 +111,17 @@ private struct TerminalSettingsView: View {
                     value: $settings.terminalFontSize,
                     in: 9...32
                 )
+            }
+
+            Section("Agent") {
+                TextField("Name", text: $settings.agentName, prompt: Text("Claude"))
+                TextField("Command", text: $settings.agentCommand, prompt: Text("claude"))
+                    .font(.system(.body, design: .monospaced))
+                TextField("Arguments", text: $settings.agentArgs, prompt: Text("optional, e.g. --model opus"))
+                    .font(.system(.body, design: .monospaced))
+                Text("Runs in a new terminal at the workspace folder via “Open in \(settings.agentName)” (⌃⇧A) or the toolbar. Launched through a login shell so your PATH applies.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Shell") {
