@@ -250,6 +250,7 @@ struct WorkspaceView: View {
 
     private func editorArea(_ workspace: Workspace) -> some View {
         EditorAreaView(
+            workspace: workspace,
             layout: workspace.layout,
             configuration: editorConfiguration,
             onCloseTab: { document, pane in workspace.requestCloseTab(document, in: pane) }

@@ -248,6 +248,20 @@ final class Workspace {
         }
     }
 
+    /// Closes every tab in a pane except the given one (dirty-safe, stops on
+    /// cancel).
+    func requestCloseOtherTabs(keeping document: OpenDocument, in pane: EditorPane) {
+        let others = pane.tabDocuments.filter { $0.id != document.id }
+        requestCloseTabs(others, in: pane)
+    }
+
+    /// Closes every tab in a pane positioned after the given one.
+    func requestCloseTabs(after document: OpenDocument, in pane: EditorPane) {
+        guard let index = pane.tabDocuments.firstIndex(where: { $0.id == document.id }) else { return }
+        let following = Array(pane.tabDocuments[(index + 1)...])
+        requestCloseTabs(following, in: pane)
+    }
+
     /// Closes the active pane, prompting for any of its dirty solo tabs first.
     func closeActivePane() {
         guard layout.panes.count > 1, let pane = layout.activePane else { return }

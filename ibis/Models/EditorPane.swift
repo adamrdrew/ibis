@@ -31,6 +31,18 @@ final class EditorPane: Identifiable {
         selectedID = document.id
     }
 
+    /// Reorders a tab, moving the document with `fromID` to sit at the position
+    /// of the tab with `toID` (dropping onto a tab). Selection is preserved.
+    func moveTab(fromID: OpenDocument.ID, toID: OpenDocument.ID) {
+        guard fromID != toID,
+              let from = tabDocuments.firstIndex(where: { $0.id == fromID }),
+              let to = tabDocuments.firstIndex(where: { $0.id == toID }) else { return }
+        let document = tabDocuments.remove(at: from)
+        let insertion = tabDocuments.firstIndex(where: { $0.id == toID }) ?? to
+        // Insert before the target when moving left, after it when moving right.
+        tabDocuments.insert(document, at: from < to ? insertion + 1 : insertion)
+    }
+
     /// Closes a document's tab, selecting a sensible neighbor.
     func close(_ document: OpenDocument) {
         guard let index = tabDocuments.firstIndex(where: { $0.id == document.id }) else { return }

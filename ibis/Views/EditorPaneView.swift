@@ -2,6 +2,7 @@ import SwiftUI
 
 /// A single editor pane: its tab strip plus the editor for the selected tab.
 struct EditorPaneView: View {
+    let workspace: Workspace
     @Bindable var pane: EditorPane
     let layout: EditorLayout
     let configuration: EditorConfiguration
@@ -30,6 +31,7 @@ struct EditorPaneView: View {
     private var header: some View {
         HStack(spacing: 4) {
             TabBarView(
+                workspace: workspace,
                 pane: pane,
                 isPaneActive: isActive,
                 onSelect: { document in
