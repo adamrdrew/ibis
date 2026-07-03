@@ -346,6 +346,7 @@ struct FileOutlineView: NSViewRepresentable {
                 }
                 menu.addItem(menuItem("Copy Path", #selector(copyPath)))
                 menu.addItem(menuItem("Copy Name", #selector(copyName)))
+                menu.addItem(menuItem("Share…", #selector(share)))
                 menu.addItem(.separator())
                 menu.addItem(menuItem("Copy", #selector(copyItems)))
                 menu.addItem(menuItem("Cut", #selector(cutItems)))
@@ -424,6 +425,13 @@ struct FileOutlineView: NSViewRepresentable {
 
         @objc private func copyName() {
             if let node = contextNode { FileOperations.copyToPasteboard(node.name) }
+        }
+
+        @objc private func share() {
+            guard let node = contextNode, let outlineView else { return }
+            let row = outlineView.row(forItem: node)
+            guard row >= 0 else { return }
+            SharePresenter.shared.share([node.url], relativeTo: outlineView.rect(ofRow: row), of: outlineView)
         }
 
         // MARK: - Copy / Cut / Paste of files

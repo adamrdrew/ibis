@@ -62,6 +62,9 @@ struct IbisCommands: Commands {
 
             Button("Reveal in Finder") { workspace?.revealActiveInFinder() }
                 .disabled(workspace?.activeDocument == nil)
+
+            Button("Share…") { shareActiveDocument() }
+                .disabled(workspace?.activeDocument?.url == nil)
         }
 
         // Standard Edit menu Find/Replace/Spelling, routed to the focused editor.
@@ -195,6 +198,15 @@ struct IbisCommands: Commands {
     private func runAgent() {
         guard let workspace, let command = settings.agentCommandLine else { return }
         workspace.runAgent(command: command, name: settings.agentName)
+    }
+
+    /// Shares the active document's file, anchoring the picker to the top of the
+    /// key window's content view (menu commands have no row to anchor to).
+    private func shareActiveDocument() {
+        guard let url = workspace?.activeDocument?.url,
+              let window = NSApp.keyWindow, let content = window.contentView else { return }
+        let rect = NSRect(x: content.bounds.midX, y: content.bounds.maxY - 1, width: 1, height: 1)
+        SharePresenter.shared.share([url], relativeTo: rect, of: content)
     }
 
     private func boolBinding(_ keyPath: ReferenceWritableKeyPath<AppSettings, Bool>) -> Binding<Bool> {
