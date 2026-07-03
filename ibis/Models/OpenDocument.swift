@@ -24,8 +24,22 @@ final class OpenDocument: Identifiable {
     var name: String { url?.lastPathComponent ?? "Untitled" }
     var isUntitled: Bool { url == nil }
 
+    /// Extensions Ibis can show as a rendered preview.
+    static let renderableExtensions: Set<String> = ["md", "markdown", "mdown", "mkd", "html", "htm"]
+
+    /// Whether this file can be shown as a rendered preview (Markdown / HTML).
+    var isRenderable: Bool {
+        guard let ext = url?.pathExtension.lowercased() else { return false }
+        return Self.renderableExtensions.contains(ext)
+    }
+
+    /// Whether the editor shows the rendered preview (vs. raw source). Renderable
+    /// files (READMEs, docs, reports) open in preview; toggled in the pane header.
+    var showsPreview: Bool = false
+
     init(url: URL) {
         self.url = url
+        showsPreview = Self.renderableExtensions.contains(url.pathExtension.lowercased())
     }
 
     /// A new, empty, untitled buffer. Nothing to read from disk, so it's already

@@ -45,6 +45,18 @@ struct EditorPaneView: View {
 
             Spacer(minLength: 0)
 
+            // Source / Preview toggle for renderable files (Markdown / HTML).
+            if let document = pane.selectedDocument, document.isRenderable {
+                Picker("View", selection: previewBinding(for: document)) {
+                    Text("Source").tag(false)
+                    Text("Preview").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .help("Show rendered preview or raw source")
+            }
+
             Button {
                 layout.activePaneID = pane.id
                 layout.splitActive()
@@ -73,6 +85,13 @@ struct EditorPaneView: View {
         .background(.bar)
     }
 
+    private func previewBinding(for document: OpenDocument) -> Binding<Bool> {
+        Binding(
+            get: { document.showsPreview },
+            set: { document.showsPreview = $0 }
+        )
+    }
+
     @ViewBuilder
     private var content: some View {
         if let document = pane.selectedDocument {
@@ -88,6 +107,9 @@ struct EditorPaneView: View {
                     systemImage: "exclamationmark.triangle",
                     description: Text(error)
                 )
+            } else if document.isRenderable, document.showsPreview, let url = document.url {
+                PreviewView(text: document.text, fileURL: url, accessRoot: workspace.rootURL)
+                    .id(document.id)
             } else {
                 CodeEditorView(
                     document: document,
