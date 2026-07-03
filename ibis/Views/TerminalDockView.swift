@@ -39,6 +39,7 @@ struct TerminalDockView: View {
             }
             .buttonStyle(.plain)
             .help("New Terminal")
+            .accessibilityLabel("New Terminal")
 
             Button {
                 settings.terminalPlacement = settings.terminalPlacement == .bottom ? .trailing : .bottom
@@ -47,6 +48,7 @@ struct TerminalDockView: View {
             }
             .buttonStyle(.plain)
             .help(settings.terminalPlacement == .bottom ? "Move Terminal to the Right" : "Move Terminal to the Bottom")
+            .accessibilityLabel(settings.terminalPlacement == .bottom ? "Move Terminal to the Right" : "Move Terminal to the Bottom")
 
             Button {
                 dock.isVisible = false
@@ -55,6 +57,7 @@ struct TerminalDockView: View {
             }
             .buttonStyle(.plain)
             .help("Hide Terminal")
+            .accessibilityLabel("Hide Terminal")
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, 8)

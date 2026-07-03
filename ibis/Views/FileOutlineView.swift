@@ -135,7 +135,7 @@ struct FileOutlineView: NSViewRepresentable {
             cell.textField?.stringValue = node.name
             cell.imageView?.image = NSImage(
                 systemSymbolName: FileIconProvider.symbolName(for: node),
-                accessibilityDescription: nil
+                accessibilityDescription: node.isDirectory ? "Folder" : "File"
             )
             cell.imageView?.contentTintColor = node.isDirectory
                 ? NSColor(Color.ibisKelly)

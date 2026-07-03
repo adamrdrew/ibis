@@ -41,6 +41,8 @@ struct ProjectSearchView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+                .accessibilityLabel("Clear Search")
+                .help("Clear Search")
             }
         }
         .padding(6)
@@ -56,6 +58,8 @@ struct ProjectSearchView: View {
             .toggleStyle(.button)
             .controlSize(.small)
             .help("Match Case")
+            .accessibilityLabel("Case Sensitive")
+            .accessibilityValue(model.caseSensitive ? "on" : "off")
 
             Spacer()
 

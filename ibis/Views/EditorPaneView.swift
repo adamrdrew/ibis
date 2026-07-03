@@ -54,6 +54,7 @@ struct EditorPaneView: View {
             .buttonStyle(.plain)
             .disabled(pane.selectedDocument == nil)
             .help("Split Editor")
+            .accessibilityLabel("Split Editor")
 
             if hasMultiplePanes {
                 Button {
@@ -63,6 +64,7 @@ struct EditorPaneView: View {
                 }
                 .buttonStyle(.plain)
                 .help("Close Pane")
+                .accessibilityLabel("Close Pane")
             }
         }
         .foregroundStyle(.secondary)

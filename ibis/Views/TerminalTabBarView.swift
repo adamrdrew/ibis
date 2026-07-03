@@ -68,6 +68,8 @@ private struct TerminalTabItemView: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
+            .accessibilityLabel("Close Terminal")
+            .help("Close Terminal")
         }
     }
 }

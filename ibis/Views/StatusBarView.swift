@@ -8,6 +8,8 @@ struct StatusBarView: View {
     var body: some View {
         HStack(spacing: 10) {
             gitSection
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(gitAccessibilityLabel)
             Spacer(minLength: 0)
         }
         .font(.caption)
@@ -62,6 +64,23 @@ struct StatusBarView: View {
                 Text("Not a Git repository")
             }
         }
+    }
+
+    /// A single spoken sentence for the whole Git bar.
+    private var gitAccessibilityLabel: String {
+        let info = git.info
+        guard info.isRepository else { return "Not a Git repository" }
+        var parts = ["Git", info.branch ?? info.shortHead ?? "detached"]
+        if info.isDirty { parts.append("uncommitted changes") }
+        if info.hasUpstream {
+            if info.isSynced {
+                parts.append("in sync")
+            } else {
+                if info.ahead > 0 { parts.append("\(info.ahead) ahead") }
+                if info.behind > 0 { parts.append("\(info.behind) behind") }
+            }
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func countBadge(_ symbol: String, _ count: Int) -> some View {
