@@ -175,11 +175,26 @@ final class Workspace {
     /// Closes a tab, prompting to save first (in a window-attached sheet) if the
     /// document has unsaved changes and isn't still open in another pane.
     func requestCloseTab(_ document: OpenDocument, in pane: EditorPane) {
-        guard pane.tabDocuments.contains(where: { $0.id == document.id }) else { return }
+        closeTabResolving(document, in: pane) { _ in }
+    }
 
+    /// Closes a tab, prompting to save first (as a sheet) if the document has
+    /// unsaved changes and isn't still open in another pane. Calls `completion`
+    /// with `true` if the tab closed (or nothing needed saving), `false` if the
+    /// user cancelled — so bulk closes can chain and stop on cancel.
+    private func closeTabResolving(
+        _ document: OpenDocument,
+        in pane: EditorPane,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard pane.tabDocuments.contains(where: { $0.id == document.id }) else {
+            completion(true)
+            return
+        }
         guard document.isDirty && !isOpenElsewhere(document, excluding: pane),
               let window = window ?? NSApp.keyWindow else {
             closeTab(document, in: pane)
+            completion(true)
             return
         }
 
@@ -188,20 +203,57 @@ final class Workspace {
             informative: "Your changes will be lost if you don’t save them."
         )
         alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
+            guard let self else { completion(false); return }
             switch response {
             case .alertFirstButtonReturn: // Save
                 if document.isUntitled {
-                    if self.saveAs(document) { self.closeTab(document, in: pane) }
+                    if self.saveAs(document) {
+                        self.closeTab(document, in: pane)
+                        completion(true)
+                    } else {
+                        completion(false)
+                    }
                 } else {
-                    Task { if await document.save() { self.closeTab(document, in: pane) } }
+                    Task {
+                        if await document.save() {
+                            self.closeTab(document, in: pane)
+                            completion(true)
+                        } else {
+                            completion(false)
+                        }
+                    }
                 }
             case .alertThirdButtonReturn: // Don't Save
                 self.discardDocument(document)
                 self.closeTab(document, in: pane)
+                completion(true)
             default: // Cancel
-                break
+                completion(false)
             }
+        }
+    }
+
+    /// Requests closing a sequence of tabs in a pane, one at a time (each dirty
+    /// document gets its own sheet). Stops if the user cancels.
+    private func requestCloseTabs(
+        _ documents: [OpenDocument],
+        in pane: EditorPane,
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
+        guard let first = documents.first else { completion(true); return }
+        let rest = Array(documents.dropFirst())
+        closeTabResolving(first, in: pane) { [weak self] closed in
+            guard closed, let self else { completion(false); return }
+            self.requestCloseTabs(rest, in: pane, completion: completion)
+        }
+    }
+
+    /// Closes the active pane, prompting for any of its dirty solo tabs first.
+    func closeActivePane() {
+        guard layout.panes.count > 1, let pane = layout.activePane else { return }
+        requestCloseTabs(pane.tabDocuments, in: pane) { [weak self] allClosed in
+            guard allClosed, let self else { return }
+            self.layout.closePane(pane.id)
         }
     }
 

@@ -97,6 +97,15 @@ struct IbisCommands: Commands {
                 .keyboardShortcut("\\")
                 .disabled(workspace?.activeDocument == nil)
 
+            Button("Focus Next Editor") { workspace?.layout.focusPane(offset: 1) }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
+                .disabled((workspace?.layout.panes.count ?? 0) < 2)
+            Button("Focus Previous Editor") { workspace?.layout.focusPane(offset: -1) }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                .disabled((workspace?.layout.panes.count ?? 0) < 2)
+            Button("Close Editor Pane") { workspace?.closeActivePane() }
+                .disabled((workspace?.layout.panes.count ?? 0) < 2)
+
             Divider()
 
             Button("Show Next Tab") { workspace?.selectAdjacentTab(offset: 1) }

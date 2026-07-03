@@ -88,7 +88,8 @@ struct EditorPaneView: View {
                 CodeEditorView(
                     document: document,
                     configuration: configuration,
-                    onActivate: { layout.activePaneID = pane.id }
+                    onActivate: { layout.activePaneID = pane.id },
+                    focusRequest: pane.focusToken
                 )
                 .id(document.id)
             }

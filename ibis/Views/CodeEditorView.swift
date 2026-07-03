@@ -24,6 +24,9 @@ struct CodeEditorView: NSViewRepresentable {
     /// Called when the editor becomes first responder, so the owning pane can
     /// mark itself active.
     var onActivate: () -> Void = {}
+    /// A monotonically increasing token from the owning pane; when it changes,
+    /// the editor takes keyboard focus (so Focus Next/Previous Editor works).
+    var focusRequest: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document)
@@ -131,6 +134,16 @@ struct CodeEditorView: NSViewRepresentable {
         }
 
         applyPendingSelectionIfNeeded(textView)
+        applyFocusRequestIfNeeded(textView, coordinator: context.coordinator)
+    }
+
+    /// Takes keyboard focus when the pane's focus token advances.
+    private func applyFocusRequestIfNeeded(_ textView: NSTextView, coordinator: Coordinator) {
+        guard focusRequest != 0, focusRequest != coordinator.lastFocusRequest else { return }
+        coordinator.lastFocusRequest = focusRequest
+        DispatchQueue.main.async {
+            textView.window?.makeFirstResponder(textView)
+        }
     }
 
     /// If the document requested a selection (e.g. opened from search), select
@@ -385,6 +398,9 @@ struct CodeEditorView: NSViewRepresentable {
         /// the document opened with a target selection (e.g. from search).
         var hasScrolledToStart = false
         var suppressStartScroll = false
+        /// The last focus token applied, so a repeated `updateNSView` doesn't
+        /// steal focus on every layout pass.
+        var lastFocusRequest = 0
         private var highlightTask: Task<Void, Never>?
 
         /// Scrolls the editor to the leading edge of the document using the

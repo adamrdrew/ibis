@@ -11,6 +11,14 @@ final class EditorPane: Identifiable {
     /// documents select correctly.
     var selectedID: OpenDocument.ID?
 
+    /// Bumped to ask this pane's editor to take keyboard focus (e.g. from the
+    /// Focus Next/Previous Editor commands, which need focus to follow visibly).
+    var focusToken = 0
+
+    func requestFocus() {
+        focusToken += 1
+    }
+
     var selectedDocument: OpenDocument? {
         tabDocuments.first { $0.id == selectedID }
     }
@@ -73,11 +81,14 @@ final class EditorLayout {
         }
     }
 
-    /// Focus the next / previous pane (wraps around).
+    /// Focus the next / previous pane (wraps around), moving keyboard focus to
+    /// its editor as well as the active-pane indicator.
     func focusPane(offset: Int) {
         guard let currentIndex = panes.firstIndex(where: { $0.id == activePaneID }),
               !panes.isEmpty else { return }
         let next = (currentIndex + offset + panes.count) % panes.count
-        activePaneID = panes[next].id
+        let pane = panes[next]
+        activePaneID = pane.id
+        pane.requestFocus()
     }
 }
