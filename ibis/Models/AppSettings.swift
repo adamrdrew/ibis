@@ -16,6 +16,16 @@ final class AppSettings {
     var lightTheme: String { didSet { defaults.set(lightTheme, forKey: Key.lightTheme) } }
     var darkTheme: String { didSet { defaults.set(darkTheme, forKey: Key.darkTheme) } }
 
+    // MARK: Integrated terminal
+
+    /// Font for the integrated terminal (separate from the editor font).
+    var terminalFontName: String { didSet { defaults.set(terminalFontName, forKey: Key.terminalFontName) } }
+    var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: Key.terminalFontSize) } }
+    /// Optional shell override; empty means use the user's login shell.
+    var terminalShellPath: String { didSet { defaults.set(terminalShellPath, forKey: Key.terminalShellPath) } }
+    /// Remembered height of the bottom terminal dock.
+    var terminalDockHeight: Double { didSet { defaults.set(terminalDockHeight, forKey: Key.terminalDockHeight) } }
+
     // Not yet surfaced in the UI; kept for the editor configuration.
     var lineSpacing: Double = 2
     var showInvisibles: Bool = false
@@ -34,6 +44,10 @@ final class AppSettings {
         wordWrap = defaults.object(forKey: Key.wordWrap) as? Bool ?? false
         lightTheme = defaults.string(forKey: Key.lightTheme) ?? "atom-one-light"
         darkTheme = defaults.string(forKey: Key.darkTheme) ?? "atom-one-dark"
+        terminalFontName = defaults.string(forKey: Key.terminalFontName) ?? "SF Mono"
+        terminalFontSize = defaults.object(forKey: Key.terminalFontSize) as? Double ?? 13
+        terminalShellPath = defaults.string(forKey: Key.terminalShellPath) ?? ""
+        terminalDockHeight = defaults.object(forKey: Key.terminalDockHeight) as? Double ?? 240
     }
 
     private enum Key {
@@ -45,5 +59,9 @@ final class AppSettings {
         static let wordWrap = "editor.wordWrap"
         static let lightTheme = "editor.lightTheme"
         static let darkTheme = "editor.darkTheme"
+        static let terminalFontName = "terminal.fontName"
+        static let terminalFontSize = "terminal.fontSize"
+        static let terminalShellPath = "terminal.shellPath"
+        static let terminalDockHeight = "terminal.dockHeight"
     }
 }

@@ -10,6 +10,7 @@ final class Workspace {
     let isDirectory: Bool
     let rootNode: FileNode
     let layout = EditorLayout()
+    let terminal: TerminalDock
 
     /// Holds security-scoped access to the root open for the workspace's lifetime.
     private let access: SecurityScopedAccess
@@ -30,6 +31,9 @@ final class Workspace {
         self.isDirectory = isDirectory
         self.access = SecurityScopedAccess(url: rootURL)
         self.rootNode = FileNode(url: rootURL, isDirectory: isDirectory)
+        // Terminals open in the folder (or a single file's containing folder).
+        let terminalRoot = isDirectory ? rootURL : rootURL.deletingLastPathComponent()
+        self.terminal = TerminalDock(workingDirectory: terminalRoot)
 
         if isDirectory {
             watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
@@ -147,5 +151,25 @@ final class Workspace {
     func revealActiveInFinder() {
         guard let url = activeDocument?.url else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Terminal actions
+
+    func toggleTerminal() {
+        terminal.toggle()
+    }
+
+    func newTerminalTab() {
+        terminal.newSession()
+        terminal.isVisible = true
+    }
+
+    func closeActiveTerminalTab() {
+        guard let id = terminal.activeSessionID else { return }
+        terminal.closeSession(id)
+    }
+
+    func selectAdjacentTerminal(offset: Int) {
+        terminal.selectAdjacent(offset: offset)
     }
 }

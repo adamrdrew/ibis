@@ -1,5 +1,5 @@
 {
-  "originHash" : "00a1c96095892a05bfd089593813422ede18735e452666e3e7a642ebd9048a45",
+  "originHash" : "bb53eb2222ce5da2b0e9b8689e7e075c4a037313b547683c5ffa18481f9b858f",
   "pins" : [
     {
       "identity" : "highlighterswift",
@@ -8,6 +8,24 @@
       "state" : {
         "revision" : "fe7aae9c9b31d3b296fd3d2dd575e1a207bb29e0",
         "version" : "3.1.0"
+      }
+    },
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "6a52f3251125d74daf04fcbd5e6f08a75d074382",
+        "version" : "1.8.2"
+      }
+    },
+    {
+      "identity" : "swiftterm",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/migueldeicaza/SwiftTerm",
+      "state" : {
+        "revision" : "8e7a1e154f470e19c709a00a8768df348ba5fc43",
+        "version" : "1.13.0"
       }
     }
   ],

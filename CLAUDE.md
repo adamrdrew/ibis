@@ -6,7 +6,12 @@ highlighting, project search. **No** run/debug, LSP, or plugin marketplace.
 
 - **Platform:** macOS only, deployment target **macOS 27**, SwiftUI + AppKit.
 - **Hero color:** kelly green (`Color.ibisKelly`), used sparingly for accents.
-- **Sandboxed** with read-write access to user-selected files + app-scope bookmarks.
+- **Not sandboxed.** The App Sandbox was removed so the integrated terminal can
+  spawn a real, useful login shell (a sandboxed child shell is crippled — see the
+  terminal gotcha below). Ships as a Developer ID-signed, **notarized** app
+  distributed from the web, **not** the Mac App Store (same model as VS Code /
+  iTerm2 / Xcode). Hardened Runtime stays ON (required for notarization).
+  The leftover `files.bookmarks.app-scope` entitlement key is a now-harmless no-op.
 
 ## Build & run
 
@@ -22,18 +27,22 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
   `Settings`), `AppDelegate` (Finder/CLI opens via `LaunchRouter`), `IbisCommands`
   (full menu bar, targets the focused window via `@FocusedValue`), `FocusedValues`.
 - **Models/** — `@Observable`, `@MainActor`. `Workspace` (root, file tree, pane
-  layout, file ops, FSEvents), `FileNode` (lazy tree node), `EditorPane`/
-  `EditorLayout`, `OpenDocument`, `AppSettings` (UserDefaults-backed),
-  `ProjectSearchModel`, `WorkspaceRef`, `WorkspaceFileEntity` (App Intents).
+  layout, file ops, FSEvents, `terminal` dock), `FileNode` (lazy tree node),
+  `EditorPane`/`EditorLayout`, `OpenDocument`, `AppSettings` (UserDefaults-backed),
+  `ProjectSearchModel`, `WorkspaceRef`, `WorkspaceFileEntity` (App Intents),
+  `TerminalDock`/`TerminalSession` (integrated terminal; mirror the pane/tab model).
 - **FileSystem/** — `FileTreeLoader`, `FileSystemWatcher` (FSEvents),
   `FileOperations`, `SecurityScopedAccess`.
 - **Syntax/** — `Language` (ext → highlight.js name), `SyntaxHighlighter`
   (actor wrapping the **HighlighterSwift** package; engine is swappable behind
   this seam), `ProjectSearch`.
-- **Views/** — `WorkspaceView` (NavigationSplitView), `FileOutlineView`
-  (NSOutlineView-backed browser), `CodeEditorView` + `LineNumberRulerView`
-  (NSTextView editor), `EditorAreaView`/`EditorPaneView`/`TabBarView`,
-  `ProjectSearchView`, `SettingsView`, `WelcomeView`.
+- **Views/** — `WorkspaceView` (NavigationSplitView; editor + bottom terminal
+  dock), `FileOutlineView` (NSOutlineView-backed browser), `CodeEditorView` +
+  `LineNumberRulerView` (NSTextView editor), `EditorAreaView`/`EditorPaneView`/
+  `TabBarView`, `TerminalDockView`/`TerminalSessionView`/`TerminalTabBarView`
+  (SwiftTerm-backed), `ProjectSearchView`, `SettingsView`, `WelcomeView`.
+- **Support/** — `EditorChrome`, `Color+Ibis`, `FileIconProvider`,
+  `ShellResolver` (login shell + environment for the terminal).
 
 ## Critical gotchas & hard-won lessons
 
@@ -88,6 +97,32 @@ force-injected or unit-tested — verify empirically.
 quitting" setting) **plus** security-scoped bookmarks so restored windows regain
 file access — not a bespoke session store. (A hand-rolled one was removed.)
 
+**Integrated terminal (SwiftTerm):** each `TerminalSession` owns a
+`LocalProcessTerminalView` that forks the user's login shell in a PTY
+(`ShellResolver`: `getpwuid` → `$SHELL` → `/bin/zsh`, launched with a leading-`-`
+argv[0] like Terminal.app, `TERM=xterm-256color`, cwd = workspace root). The App
+Sandbox **must be off** — a sandboxed child shell inherits the container and is
+useless (no PATH tools, no filesystem access, `tty pgrp` errors).
+
+**Never detach a SwiftTerm view from the window** — doing so resets its buffer,
+so the running process appears to lose all scrollback/history. This bit us twice:
+(1) switching terminal tabs via a single `.id()`-swapped slot, and (2) hiding the
+dock by removing it from the view tree. Both fixed by keeping every terminal view
+**mounted at all times**: tabs live in a `ZStack` (only the active one shown via
+`opacity`/`allowsHitTesting`), and the dock stays in the layout even when hidden —
+a nested-frame trick (`.frame(height: h).frame(height: visible ? h : 0).clipped()`)
+collapses the *space* to zero while keeping the terminal laid out at full height
+(also avoids a resize-to-zero SIGWINCH on hide). The dock is a `VStack` + a custom
+drag handle, **not** `VSplitView`, because VSplitView can't collapse a pane to 0.
+
+**Menu commands that target a window need `focusedSceneValue`, not
+`focusedValue`.** `@FocusedValue`-published values only resolve when a view
+*inside* the window holds focus — so with a folder open but no editor focused,
+every window-targeting command (Show Terminal, Save As, Split, …) greyed out.
+`WorkspaceView` publishes `activeWorkspace`/`sidebarMode` via `.focusedSceneValue`
+so they resolve whenever the window is frontmost, regardless of inner focus.
+(Read side is still `@FocusedValue` in `IbisCommands`.)
+
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
 view tree and CALayer tree (class, frame, owner) and pixel-probe. That found the
@@ -97,4 +132,8 @@ culprit immediately when source-reading had a 100% failure rate.
 
 - **HighlighterSwift** (`import Highlighter`) — highlight.js via JavaScriptCore.
   Added as an SPM package (user adds packages in Xcode). `Package.resolved` is
+  committed.
+- **SwiftTerm** (`import SwiftTerm`) — VT100/xterm terminal emulator + PTY host
+  (`LocalProcessTerminalView`). SPM package; pulls in `swift-argument-parser`.
+  Requires the sandbox to be off (see terminal gotcha). `Package.resolved`
   committed.

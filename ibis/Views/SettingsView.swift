@@ -8,7 +8,10 @@ struct SettingsView: View {
             Tab("Editor", systemImage: "textformat.size") {
                 EditorSettingsView()
             }
-            Tab("Command Line", systemImage: "terminal") {
+            Tab("Terminal", systemImage: "terminal") {
+                TerminalSettingsView()
+            }
+            Tab("Command Line", systemImage: "command") {
                 CommandLineSettingsView()
             }
         }
@@ -79,6 +82,65 @@ private struct EditorSettingsView: View {
     }
 }
 
+private struct TerminalSettingsView: View {
+    @Environment(AppSettings.self) private var settings
+    @State private var fontChoices: [String] = []
+
+    /// The shell that will be used when the override field is left blank.
+    private var defaultShell: String {
+        ShellResolver.resolve(override: nil).executable
+    }
+
+    var body: some View {
+        @Bindable var settings = settings
+        Form {
+            Section("Font") {
+                Picker("Typeface", selection: $settings.terminalFontName) {
+                    ForEach(fontChoices, id: \.self) { Text($0).tag($0) }
+                }
+                Stepper(
+                    "Size: \(Int(settings.terminalFontSize)) pt",
+                    value: $settings.terminalFontSize,
+                    in: 9...32
+                )
+            }
+
+            Section("Shell") {
+                TextField("Shell Path", text: $settings.terminalShellPath, prompt: Text(defaultShell))
+                    .font(.system(.body, design: .monospaced))
+
+                HStack {
+                    Button("Choose…") { chooseShell() }
+                    if !settings.terminalShellPath.isEmpty {
+                        Button("Use Default") { settings.terminalShellPath = "" }
+                    }
+                    Spacer()
+                }
+
+                Text("Leave blank to use your login shell (\(defaultShell)). Launched as a login shell. Changes apply to newly opened terminals.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .task {
+            fontChoices = EditorSettingsView.monospacedFonts(including: settings.terminalFontName)
+        }
+    }
+
+    private func chooseShell() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/bin")
+        panel.prompt = "Choose Shell"
+        if panel.runModal() == .OK, let url = panel.url {
+            settings.terminalShellPath = url.path(percentEncoded: false)
+        }
+    }
+}
+
 private struct CommandLineSettingsView: View {
     @State private var copied = false
 
@@ -103,7 +165,7 @@ private struct CommandLineSettingsView: View {
             }
 
             Section("Install") {
-                Text("Ibis runs in the macOS sandbox and can't modify `/usr/local/bin` itself. Copy the command below, paste it into Terminal, and press Return — you'll be asked for your password.")
+                Text("Installing to `/usr/local/bin` needs administrator rights. Copy the command below, paste it into a terminal, and press Return — you'll be asked for your password.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 

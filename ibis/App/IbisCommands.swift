@@ -100,6 +100,31 @@ struct IbisCommands: Commands {
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(workspace == nil)
         }
+
+        // MARK: Terminal
+        CommandMenu("Terminal") {
+            Button((workspace?.terminal.isVisible ?? false) ? "Hide Terminal" : "Show Terminal") {
+                workspace?.toggleTerminal()
+            }
+            .keyboardShortcut(KeyEquivalent("`"), modifiers: .control)
+            .disabled(workspace == nil)
+
+            Button("New Terminal Tab") { workspace?.newTerminalTab() }
+                .keyboardShortcut(KeyEquivalent("`"), modifiers: [.control, .shift])
+                .disabled(workspace == nil)
+
+            Button("Close Terminal Tab") { workspace?.closeActiveTerminalTab() }
+                .disabled(workspace?.terminal.activeSessionID == nil)
+
+            Divider()
+
+            Button("Show Next Terminal") { workspace?.selectAdjacentTerminal(offset: 1) }
+                .keyboardShortcut("]", modifiers: [.control, .shift])
+                .disabled(workspace?.terminal.activeSessionID == nil)
+            Button("Show Previous Terminal") { workspace?.selectAdjacentTerminal(offset: -1) }
+                .keyboardShortcut("[", modifiers: [.control, .shift])
+                .disabled(workspace?.terminal.activeSessionID == nil)
+        }
     }
 
     // MARK: - Helpers
