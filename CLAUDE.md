@@ -2,7 +2,9 @@
 
 A lightweight, folder-oriented macOS code editor (not an IDE): open files/folders,
 browse a hierarchical file tree, edit in tabs and resizable split panes, syntax
-highlighting, project search. **No** run/debug, LSP, or plugin marketplace.
+highlighting, project search, an integrated terminal (tabs + one-key launch of a
+configured agent), and a live Git status bar. **No** run/debug, LSP, or plugin
+marketplace.
 
 - **Platform:** macOS only, deployment target **macOS 27**, SwiftUI + AppKit.
 - **Hero color:** kelly green (`Color.ibisKelly`), used sparingly for accents.
@@ -23,24 +25,28 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
 
 ## Architecture (all sources under `ibis/`)
 
-- **App/** — `IbisApp` (`@main`, data-driven `WindowGroup(for: WorkspaceRef)` +
-  `Settings`), `AppDelegate` (Finder/CLI opens via `LaunchRouter`), `IbisCommands`
-  (full menu bar, targets the focused window via `@FocusedValue`), `FocusedValues`.
+- **App/** — `IbisApp` (`@main`; a compact non-resizable `Window` launcher scene
+  + a `WindowGroup(for: WorkspaceRef)` for editor windows at a 4:3 `defaultSize`
+  + `Settings`), `AppDelegate` (Finder/CLI opens via `LaunchRouter`), `IbisCommands`
+  (full menu bar, targets the frontmost window via focused scene values),
+  `FocusedValues`.
 - **Models/** — `@Observable`, `@MainActor`. `Workspace` (root, file tree, pane
-  layout, file ops, FSEvents, `terminal` dock), `FileNode` (lazy tree node),
-  `EditorPane`/`EditorLayout`, `OpenDocument`, `AppSettings` (UserDefaults-backed),
-  `ProjectSearchModel`, `WorkspaceRef`, `WorkspaceFileEntity` (App Intents),
-  `TerminalDock`/`TerminalSession` (integrated terminal; mirror the pane/tab model).
+  layout, file ops, FSEvents, `terminal` dock, `git` status), `FileNode` (lazy tree
+  node), `EditorPane`/`EditorLayout`, `OpenDocument`, `AppSettings`
+  (UserDefaults-backed), `ProjectSearchModel`, `WorkspaceRef`, `WorkspaceFileEntity`
+  (App Intents), `TerminalDock`/`TerminalSession` (integrated terminal; mirror the
+  pane/tab model), `GitStatusModel` (shells out to `git`).
 - **FileSystem/** — `FileTreeLoader`, `FileSystemWatcher` (FSEvents),
   `FileOperations`, `SecurityScopedAccess`.
 - **Syntax/** — `Language` (ext → highlight.js name), `SyntaxHighlighter`
   (actor wrapping the **HighlighterSwift** package; engine is swappable behind
   this seam), `ProjectSearch`.
-- **Views/** — `WorkspaceView` (NavigationSplitView; editor + bottom terminal
-  dock), `FileOutlineView` (NSOutlineView-backed browser), `CodeEditorView` +
-  `LineNumberRulerView` (NSTextView editor), `EditorAreaView`/`EditorPaneView`/
-  `TabBarView`, `TerminalDockView`/`TerminalSessionView`/`TerminalTabBarView`
-  (SwiftTerm-backed), `ProjectSearchView`, `SettingsView`, `WelcomeView`.
+- **Views/** — `WorkspaceView` (NavigationSplitView; editor + terminal dock
+  [bottom or trailing] + `StatusBarView` git bar), `FileOutlineView`
+  (NSOutlineView-backed browser), `CodeEditorView` + `LineNumberRulerView`
+  (NSTextView editor), `EditorAreaView`/`EditorPaneView`/`TabBarView`,
+  `TerminalDockView`/`TerminalSessionView`/`TerminalTabBarView` (SwiftTerm-backed),
+  `StatusBarView`, `ProjectSearchView`, `SettingsView`, `WelcomeView` (the launcher).
 - **Support/** — `EditorChrome`, `Color+Ibis`, `FileIconProvider`,
   `ShellResolver` (login shell + environment for the terminal).
 
@@ -92,10 +98,16 @@ App Intents metadata extraction runs automatically at build. The item is
 system-gated (macOS 27 + Siri/Apple Intelligence enabled) and cannot be
 force-injected or unit-tested — verify empirically.
 
-**Window/session restoration:** the idiomatic approach is native
+**Windows & restoration:** two scenes, because splash and editor need different
+sizing/resizability (a single `WindowGroup` can't vary those). A `Window`
+launcher (`WelcomeView`, `windowResizability(.contentSize)`, fixed-width content,
+`restorationBehavior(.disabled)`) is the primary scene, so it opens on a plain
+launch; it dismisses itself (`@Environment(\.dismiss)`) when a file/folder opens
+and drains the `LaunchRouter` for CLI/Finder opens. Editor windows come from the
+`WindowGroup(for: WorkspaceRef)` with a 4:3 `defaultSize`. Restoration is native
 `WindowGroup(for:)` scene restoration (respects the system "Close windows when
-quitting" setting) **plus** security-scoped bookmarks so restored windows regain
-file access — not a bespoke session store. (A hand-rolled one was removed.)
+quitting" setting) — no bespoke session store, and no security-scoped bookmarks
+needed now that the app is unsandboxed. `File ▸ New Window` opens the launcher.
 
 **Integrated terminal (SwiftTerm):** each `TerminalSession` owns a
 `LocalProcessTerminalView` that forks the user's login shell in a PTY
@@ -105,15 +117,28 @@ Sandbox **must be off** — a sandboxed child shell inherits the container and i
 useless (no PATH tools, no filesystem access, `tty pgrp` errors).
 
 **Never detach a SwiftTerm view from the window** — doing so resets its buffer,
-so the running process appears to lose all scrollback/history. This bit us twice:
-(1) switching terminal tabs via a single `.id()`-swapped slot, and (2) hiding the
-dock by removing it from the view tree. Both fixed by keeping every terminal view
-**mounted at all times**: tabs live in a `ZStack` (only the active one shown via
-`opacity`/`allowsHitTesting`), and the dock stays in the layout even when hidden —
-a nested-frame trick (`.frame(height: h).frame(height: visible ? h : 0).clipped()`)
-collapses the *space* to zero while keeping the terminal laid out at full height
-(also avoids a resize-to-zero SIGWINCH on hide). The dock is a `VStack` + a custom
-drag handle, **not** `VSplitView`, because VSplitView can't collapse a pane to 0.
+so the running process appears to lose all scrollback/history. This bit us three
+times: (1) switching terminal tabs via a single `.id()`-swapped slot, (2) hiding
+the dock by removing it from the view tree, and (3) flipping the dock between
+bottom and trailing by switching `VStack`↔`HStack` (a container-type change breaks
+subtree identity). Fixes, all keeping every terminal view **mounted at all times**:
+tabs live in a `ZStack` (only the active shown via `opacity`/`allowsHitTesting`);
+the dock stays in the layout even when hidden via a nested-frame trick
+(`.frame(height: h).frame(height: visible ? h : 0).clipped()`) that collapses the
+*space* to zero while keeping the terminal laid out at full height (also avoids a
+resize-to-zero SIGWINCH); and orientation uses **`AnyLayout`** (swap
+`HStackLayout`/`VStackLayout` on one container) which preserves subview identity.
+The dock is a plain stack + a custom drag handle, **not** `VSplitView`, because
+VSplitView can't collapse a pane to 0.
+
+**Integrated terminal, continued:** a `TerminalSession` can run a specific command
+instead of an interactive shell — that's how "Open in Agent" works: it launches
+the configured agent through a login shell (`shell -l -c "<cmd>"`, so PATH
+resolves) in a new tab rooted at the workspace. When any shell/agent exits,
+`processTerminated` flips `isRunning` and the dock overlays a "Shell exited —
+Restart" affordance (Return on the active terminal); Restart reuses the same view.
+Git status refreshes off the same FSEvents watcher, so committing/branch-switching
+in a terminal updates the status bar within the watcher's latency.
 
 **Menu commands that target a window need `focusedSceneValue`, not
 `focusedValue`.** `@FocusedValue`-published values only resolve when a view
