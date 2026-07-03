@@ -135,10 +135,48 @@ final class Workspace {
 
     func closeActiveTab() {
         guard let pane = layout.activePane, let url = pane.selectedURL else { return }
+        requestCloseTab(url: url, in: pane)
+    }
+
+    /// Closes a tab, prompting to save first if the document has unsaved changes
+    /// and isn't still open in another pane.
+    func requestCloseTab(url: URL, in pane: EditorPane) {
+        guard let document = pane.tabDocuments.first(where: { $0.url == url }) else { return }
+
+        if document.isDirty && !isOpenElsewhere(url: url, excluding: pane) {
+            switch confirmSave(
+                message: "Do you want to save the changes you made to “\(document.name)”?",
+                informative: "Your changes will be lost if you don’t save them."
+            ) {
+            case .cancel:
+                return
+            case .discard:
+                discardDocument(url)
+            case .save:
+                Task {
+                    if await document.save() { self.closeTab(url, in: pane) }
+                }
+                return
+            }
+        }
+        closeTab(url, in: pane)
+    }
+
+    private func closeTab(_ url: URL, in pane: EditorPane) {
         pane.close(url)
         if pane.tabDocuments.isEmpty && layout.panes.count > 1 {
             layout.closePane(pane.id)
         }
+    }
+
+    private func isOpenElsewhere(url: URL, excluding pane: EditorPane) -> Bool {
+        layout.panes.contains { $0.id != pane.id && $0.tabDocuments.contains { $0.url == url } }
+    }
+
+    /// Drops a document's buffer so its unsaved edits are truly discarded; a
+    /// later reopen reads fresh from disk.
+    private func discardDocument(_ url: URL) {
+        documentCache.removeValue(forKey: url)
     }
 
     func splitActiveEditor() {
@@ -186,5 +224,57 @@ final class Workspace {
     func runAgent(command: String, name: String) {
         terminal.newSession(command: command, title: name)
         terminal.isVisible = true
+    }
+
+    // MARK: - Unsaved changes
+
+    private enum SaveDecision { case save, discard, cancel }
+
+    /// Distinct documents with unsaved edits that are currently open in a tab.
+    var dirtyDocuments: [OpenDocument] {
+        var seen = Set<URL>()
+        var result: [OpenDocument] = []
+        for pane in layout.panes {
+            for document in pane.tabDocuments where document.isDirty && !seen.contains(document.url) {
+                seen.insert(document.url)
+                result.append(document)
+            }
+        }
+        return result
+    }
+
+    /// Called from the window's close guard: prompts if there are unsaved
+    /// changes and returns whether the window may close.
+    func confirmWindowClose() -> Bool {
+        let dirty = dirtyDocuments
+        guard !dirty.isEmpty else { return true }
+
+        let message = dirty.count == 1
+            ? "Do you want to save the changes you made to “\(dirty[0].name)”?"
+            : "You have \(dirty.count) documents with unsaved changes."
+        switch confirmSave(message: message, informative: "Your changes will be lost if you don’t save them.") {
+        case .cancel:
+            return false
+        case .discard:
+            return true
+        case .save:
+            for document in dirty { document.saveSynchronously() }
+            return true
+        }
+    }
+
+    /// Shows the standard Save / Cancel / Don't Save sheet-style alert.
+    private func confirmSave(message: String, informative: String) -> SaveDecision {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = informative
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn: return .save
+        case .alertThirdButtonReturn: return .discard
+        default: return .cancel
+        }
     }
 }

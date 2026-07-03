@@ -62,6 +62,20 @@ final class OpenDocument: Identifiable {
         return succeeded
     }
 
+    /// Writes to disk synchronously. Used on window close, where the decision to
+    /// proceed must be made before the window goes away.
+    @discardableResult
+    func saveSynchronously() -> Bool {
+        guard !isBinary, loadError == nil else { return false }
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            isDirty = false
+            return true
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Reading
 
     private enum ReadOutcome: Sendable {

@@ -88,6 +88,10 @@ struct WorkspaceView: View {
                 .disabled(activeDocument == nil)
                 .hidden()
         }
+        // Confirm unsaved changes before the window closes.
+        .background {
+            WindowCloseGuard { workspace?.confirmWindowClose() ?? true }
+        }
         // Expose the frontmost window's workspace and sidebar mode to the menu
         // bar. Scene-scoped (not focus-scoped) so commands like Show Terminal
         // work whenever the window is active, even with no editor focused.
@@ -237,8 +241,12 @@ struct WorkspaceView: View {
     }
 
     private func editorArea(_ workspace: Workspace) -> some View {
-        EditorAreaView(layout: workspace.layout, configuration: editorConfiguration)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        EditorAreaView(
+            layout: workspace.layout,
+            configuration: editorConfiguration,
+            onCloseTab: { url, pane in workspace.requestCloseTab(url: url, in: pane) }
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     // The dock stays mounted at its real size even when hidden (an outer frame
