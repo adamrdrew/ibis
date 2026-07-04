@@ -531,6 +531,26 @@ final class Workspace {
         layout.activePane?.open(document)
     }
 
+    /// Whether the integrated terminal currently holds keyboard focus (its live
+    /// terminal view, or a descendant, is the window's first responder).
+    var isTerminalFocused: Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return terminal.sessions.contains { session in
+            guard let view = session.terminalView else { return false }
+            return responder === view || responder.isDescendant(of: view)
+        }
+    }
+
+    /// Opens a new tab in whichever area has focus: a terminal tab when the
+    /// terminal is focused, otherwise a new editor tab. Backs ⌘T.
+    func newTabInFocusedArea() {
+        if isTerminalFocused {
+            newTerminalTab()
+        } else {
+            newUntitledDocument()
+        }
+    }
+
     func saveActiveDocument() async {
         guard let document = activeDocument else { return }
         if document.isUntitled {

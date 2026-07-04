@@ -43,6 +43,18 @@ struct IbisCommands: Commands {
             }
             .keyboardShortcut("n")
 
+            // Context-sensitive: a terminal tab when the terminal has focus,
+            // otherwise a new editor tab.
+            Button("New Tab") {
+                if let workspace {
+                    workspace.newTabInFocusedArea()
+                } else {
+                    openWindow(id: welcomeWindowID)
+                }
+            }
+            .keyboardShortcut("t")
+            .disabled(workspace == nil)
+
             Button("New Window") {
                 openWindow(id: welcomeWindowID)
             }
