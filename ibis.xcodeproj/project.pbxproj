@@ -543,6 +543,7 @@
 			};
 			traits = (
 				Server,
+				default,
 			);
 		};
 		66ACBD532FF71B51008F6F54 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
