@@ -45,6 +45,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Called when the shell process exits (used by the action runner).
     @ObservationIgnored var onExit: (() -> Void)?
 
+    /// Requests that this session's terminal view take keyboard focus once it is
+    /// built and in a window. Set when a new terminal or agent tab is opened, so
+    /// the user can start typing immediately.
+    @ObservationIgnored var wantsFocus = false
+
     init(
         workingDirectory: URL,
         command: String? = nil,
@@ -95,6 +100,12 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         Task { @MainActor [weak self] in
             guard let self, !self.hasStarted else { return }
             self.startShell(shellOverride: override, on: view)
+            // Now that the view is built and (this hop) in the window, honor a
+            // pending focus request from opening a new terminal / agent tab.
+            if self.wantsFocus {
+                self.wantsFocus = false
+                view.window?.makeFirstResponder(view)
+            }
         }
         return view
     }

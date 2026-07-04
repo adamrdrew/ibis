@@ -52,6 +52,8 @@ final class TerminalDock {
             role: role,
             extraEnvironment: projectEnv
         )
+        // Give the freshly opened terminal/agent tab keyboard focus once built.
+        session.wantsFocus = true
         sessions.append(session)
         activeSessionID = session.id
         return session
