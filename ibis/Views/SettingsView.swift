@@ -199,7 +199,10 @@ private struct AgentSettingsView: View {
 
                     LabeledContent("Status") {
                         if let port = MCPService.runningPort {
-                            Label("Running on 127.0.0.1:\(port)", systemImage: "circle.fill")
+                            // `\(String(port))` keeps LocalizedStringKey from
+                            // formatting the port as a number (which inserts a
+                            // grouping comma: "4,319").
+                            Label("Running on 127.0.0.1:\(String(port))", systemImage: "circle.fill")
                                 .foregroundStyle(.green)
                                 .labelStyle(.titleAndIcon)
                         } else if let error = MCPService.startError, settings.mcpEnabled {
