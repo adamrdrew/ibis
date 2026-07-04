@@ -116,7 +116,9 @@ final class GitStatusModel {
         return parse(String(data: outData, encoding: .utf8) ?? "")
     }
 
-    nonisolated private static func parse(_ output: String) -> Info {
+    // `internal` (not `private`) so the porcelain parser can be unit-tested via
+    // `@testable import` without spawning git.
+    nonisolated static func parse(_ output: String) -> Info {
         var info = Info(isRepository: true)
         for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
             if let value = line.dropPrefix("# branch.oid ") {

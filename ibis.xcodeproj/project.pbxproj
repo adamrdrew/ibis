@@ -14,8 +14,19 @@
 		66BA32152FF5EE25002CA212 /* Highlighter in Frameworks */ = {isa = PBXBuildFile; productRef = 66BA32142FF5EE25002CA212 /* Highlighter */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		66F4F8742FF9519B00A96029 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 000000000000000100000000;
+			remoteInfo = ibis;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* ibis.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ibis.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		66F4F8702FF9519B00A96029 /* ibisTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ibisTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -37,6 +48,11 @@
 			path = ibis;
 			sourceTree = "<group>";
 		};
+		66F4F8712FF9519B00A96029 /* ibisTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ibisTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -50,6 +66,11 @@
 				669F84852FF8458300A2051F /* SwiftMCP in Frameworks */,
 			);
 		};
+		66F4F86D2FF9519B00A96029 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -57,6 +78,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000010 /* ibis */,
+				66F4F8712FF9519B00A96029 /* ibisTests */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -65,6 +87,7 @@
 			isa = PBXGroup;
 			children = (
 				000000000000000000000120 /* ibis.app */,
+				66F4F8702FF9519B00A96029 /* ibisTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -97,6 +120,27 @@
 			productReference = 000000000000000000000120 /* ibis.app */;
 			productType = "com.apple.product-type.application";
 		};
+		66F4F86F2FF9519B00A96029 /* ibisTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 66F4F8762FF9519B00A96029 /* Build configuration list for PBXNativeTarget "ibisTests" */;
+			buildPhases = (
+				66F4F86C2FF9519B00A96029 /* Sources */,
+				66F4F86D2FF9519B00A96029 /* Frameworks */,
+				66F4F86E2FF9519B00A96029 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				66F4F8752FF9519B00A96029 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				66F4F8712FF9519B00A96029 /* ibisTests */,
+			);
+			name = ibisTests;
+			productName = ibisTests;
+			productReference = 66F4F8702FF9519B00A96029 /* ibisTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -104,11 +148,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 2630;
+				LastSwiftUpdateCheck = 2700;
 				LastUpgradeCheck = 2700;
 				TargetAttributes = {
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
+					};
+					66F4F86F2FF9519B00A96029 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 000000000000000100000000;
 					};
 				};
 			};
@@ -132,12 +180,18 @@
 			projectRoot = "";
 			targets = (
 				000000000000000100000000 /* ibis */,
+				66F4F86F2FF9519B00A96029 /* ibisTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		66F4F86E2FF9519B00A96029 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -150,7 +204,20 @@
 			files = (
 			);
 		};
+		66F4F86C2FF9519B00A96029 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		66F4F8752FF9519B00A96029 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 000000000000000100000000 /* ibis */;
+			targetProxy = 66F4F8742FF9519B00A96029 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		000000000000000011000000 /* Debug configuration for PBXProject "ibis" */ = {
@@ -395,6 +462,48 @@
 			};
 			name = Release;
 		};
+		66F4F8772FF9519B00A96029 /* Debug configuration for PBXNativeTarget "ibisTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P8645Z2MB8;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = adamrdrew.ibisTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ibis.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ibis";
+			};
+			name = Debug;
+		};
+		66F4F8782FF9519B00A96029 /* Release configuration for PBXNativeTarget "ibisTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = P8645Z2MB8;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = adamrdrew.ibisTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/ibis.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/ibis";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -411,6 +520,14 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "ibis" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "ibis" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		66F4F8762FF9519B00A96029 /* Build configuration list for PBXNativeTarget "ibisTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				66F4F8772FF9519B00A96029 /* Debug configuration for PBXNativeTarget "ibisTests" */,
+				66F4F8782FF9519B00A96029 /* Release configuration for PBXNativeTarget "ibisTests" */,
 			);
 			defaultConfigurationName = Release;
 		};
