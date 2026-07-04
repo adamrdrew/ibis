@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 90;
+	objectVersion = 100;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -541,6 +541,9 @@
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.2.0;
 			};
+			traits = (
+				Server,
+			);
 		};
 		66ACBD532FF71B51008F6F54 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
