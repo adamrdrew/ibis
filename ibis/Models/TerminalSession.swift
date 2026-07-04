@@ -81,6 +81,9 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func makeTerminalView(font: NSFont, shellOverride: String?) -> LocalProcessTerminalView {
         if let terminalView { return terminalView }
 
+        // Make the mouse wheel scroll full-screen TUIs (Claude Code, less, vim…).
+        TerminalScrollFix.installIfNeeded()
+
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
         view.font = font
