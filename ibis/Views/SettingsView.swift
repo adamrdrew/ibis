@@ -11,8 +11,8 @@ struct SettingsView: View {
             Tab("Terminal", systemImage: "terminal") {
                 TerminalSettingsView()
             }
-            Tab("MCP", systemImage: "point.3.filled.connected.trianglepath.dotted") {
-                MCPSettingsView()
+            Tab("Agent", systemImage: "sparkles") {
+                AgentSettingsView()
             }
             Tab("Command Line", systemImage: "command") {
                 CommandLineSettingsView()
@@ -128,17 +128,6 @@ private struct TerminalSettingsView: View {
                 )
             }
 
-            Section("Agent") {
-                TextField("Name", text: $settings.agentName, prompt: Text("Claude"))
-                TextField("Command", text: $settings.agentCommand, prompt: Text("claude"))
-                    .font(.system(.body, design: .monospaced))
-                TextField("Arguments", text: $settings.agentArgs, prompt: Text("optional, e.g. --model opus"))
-                    .font(.system(.body, design: .monospaced))
-                Text("Runs in a new terminal at the workspace folder via “Open in \(settings.agentName)” (⌃⇧A) or the toolbar. Launched through a login shell so your PATH applies.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Shell") {
                 TextField("Shell Path", text: $settings.terminalShellPath, prompt: Text(defaultShell))
                     .font(.system(.body, design: .monospaced))
@@ -175,7 +164,7 @@ private struct TerminalSettingsView: View {
     }
 }
 
-private struct MCPSettingsView: View {
+private struct AgentSettingsView: View {
     @Environment(AppSettings.self) private var settings
     @State private var status: String?
     @State private var isError = false
@@ -184,6 +173,17 @@ private struct MCPSettingsView: View {
         @Bindable var settings = settings
         Form {
             Section("Agent") {
+                TextField("Name", text: $settings.agentName, prompt: Text("Claude"))
+                TextField("Command", text: $settings.agentCommand, prompt: Text("claude"))
+                    .font(.system(.body, design: .monospaced))
+                TextField("Arguments", text: $settings.agentArgs, prompt: Text("optional, e.g. --model opus"))
+                    .font(.system(.body, design: .monospaced))
+                Text("Runs in a new terminal at the workspace folder via “Open in \(settings.agentName)” (⌃⇧A) or the toolbar. Launched through a login shell so your PATH applies.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Configuration Format") {
                 Picker("Your Agent", selection: $settings.agentKind) {
                     ForEach(AgentKind.allCases) { Text($0.displayName).tag($0) }
                 }
