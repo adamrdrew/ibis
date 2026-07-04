@@ -224,7 +224,10 @@ enum MCPService {
         let token = MCPBridge.shared.token(for: workspace)
         _ = try? MCPConfigWriter.write(
             agent: settings.agentKind,
-            projectRoot: workspace.rootURL,
+            // Use the project directory, not rootURL: for a single-file workspace
+            // rootURL is the *file*, so writing "<file>/.mcp.json" would fail and
+            // leave the agent unbound. projectRoot is where the agent's cwd is.
+            projectRoot: workspace.projectRoot,
             port: port,
             token: token
         )

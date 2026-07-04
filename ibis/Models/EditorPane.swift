@@ -33,14 +33,35 @@ final class EditorPane: Identifiable {
 
     /// Reorders a tab, moving the document with `fromID` to sit at the position
     /// of the tab with `toID` (dropping onto a tab). Selection is preserved.
-    func moveTab(fromID: OpenDocument.ID, toID: OpenDocument.ID) {
+    /// Returns `false` when the move can't apply here (e.g. the dragged tab
+    /// belongs to another pane), so the drop can decline instead of falsely
+    /// reporting success.
+    @discardableResult
+    func moveTab(fromID: OpenDocument.ID, toID: OpenDocument.ID) -> Bool {
         guard fromID != toID,
               let from = tabDocuments.firstIndex(where: { $0.id == fromID }),
-              let to = tabDocuments.firstIndex(where: { $0.id == toID }) else { return }
+              let to = tabDocuments.firstIndex(where: { $0.id == toID }) else { return false }
         let document = tabDocuments.remove(at: from)
         let insertion = tabDocuments.firstIndex(where: { $0.id == toID }) ?? to
         // Insert before the target when moving left, after it when moving right.
         tabDocuments.insert(document, at: from < to ? insertion + 1 : insertion)
+        return true
+    }
+
+    /// Replaces every tab backed by `old` with `new` (used when Save As retargets
+    /// a document onto a URL another open document already backed, so no orphaned
+    /// duplicate buffer is left behind for the same file).
+    func replace(_ old: OpenDocument, with new: OpenDocument) {
+        guard old !== new else { return }
+        var replaced = false
+        for index in tabDocuments.indices where tabDocuments[index].id == old.id {
+            tabDocuments[index] = new
+            replaced = true
+        }
+        guard replaced else { return }
+        var seen = Set<OpenDocument.ID>()
+        tabDocuments = tabDocuments.filter { seen.insert($0.id).inserted }
+        if selectedID == old.id { selectedID = new.id }
     }
 
     /// Closes a document's tab, selecting a sensible neighbor.

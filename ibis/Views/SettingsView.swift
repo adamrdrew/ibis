@@ -244,7 +244,9 @@ private struct MCPSettingsView: View {
         do {
             let result = try MCPConfigWriter.write(
                 agent: settings.agentKind,
-                projectRoot: workspace.rootURL,
+                // Project directory, not rootURL (which is the file itself for a
+                // single-file workspace) — see MCPService.bindAgent.
+                projectRoot: workspace.projectRoot,
                 port: port,
                 token: MCPBridge.shared.token(for: workspace)
             )

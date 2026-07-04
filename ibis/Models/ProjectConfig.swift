@@ -58,6 +58,12 @@ final class ProjectConfig {
     /// `.ibis.json` (e.g. via a merged PR), where the trust prompt won't re-appear.
     private static let blockedEnvKeys: Set<String> = [
         "ZDOTDIR", "ENV", "BASH_ENV", "LD_PRELOAD", "LD_LIBRARY_PATH",
+        // HOME and XDG_CONFIG_HOME redirect where the shell looks for its startup
+        // files (zsh's ZDOTDIR *defaults to* HOME; fish/others read
+        // XDG_CONFIG_HOME), so overriding them makes a new login shell source the
+        // repo's own rc scripts before the user's command — the same startup
+        // hijack ZDOTDIR is blocked for. Neither has a legitimate project use.
+        "HOME", "XDG_CONFIG_HOME",
     ]
 
     /// Whether a key is a code-injection vector we never inject (see above).
@@ -74,7 +80,9 @@ final class ProjectConfig {
         for variable in envVars {
             let key = variable.key.trimmingCharacters(in: .whitespaces)
             guard !key.isEmpty, !Self.isBlockedEnvKey(key) else { continue }
-            result[variable.key] = variable.value
+            // Inject the trimmed key — exporting `"PATH "` (with the stray space
+            // the user validated away) would be a useless, non-matching entry.
+            result[key] = variable.value
         }
         return result
     }

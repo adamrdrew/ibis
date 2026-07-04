@@ -1,5 +1,21 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
+
+/// A typed payload for dragging editor tabs. Using a dedicated content type
+/// (rather than a bare `String`) means a tab dropped onto the code editor or the
+/// terminal is *not* accepted as plain text — so a slightly-missed reorder can no
+/// longer insert a UUID into the document or paste it into the shell.
+private extension UTType {
+    static let ibisEditorTab = UTType(exportedAs: "com.adamdrew.ibis.editor-tab")
+}
+
+private struct EditorTabTransfer: Codable, Transferable {
+    let id: UUID
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .ibisEditorTab)
+    }
+}
 
 /// The horizontal tab strip at the top of an editor pane.
 struct TabBarView: View {
@@ -22,11 +38,12 @@ struct TabBarView: View {
                         onSelect: { onSelect(document) },
                         onClose: { onClose(document) }
                     )
-                    .draggable(document.id.uuidString)
-                    .dropDestination(for: String.self) { items, _ in
-                        guard let dropped = items.first, let fromID = UUID(uuidString: dropped) else { return false }
-                        pane.moveTab(fromID: fromID, toID: document.id)
-                        return true
+                    .draggable(EditorTabTransfer(id: document.id))
+                    .dropDestination(for: EditorTabTransfer.self) { items, _ in
+                        guard let dropped = items.first else { return false }
+                        // moveTab returns false for a tab from another pane, so the
+                        // drop declines rather than animating an accepted no-op.
+                        return pane.moveTab(fromID: dropped.id, toID: document.id)
                     }
                 }
             }

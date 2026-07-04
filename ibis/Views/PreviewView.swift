@@ -18,7 +18,11 @@ struct PreviewView: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        // Don't let previewed pages persist cookies / localStorage across renders
+        // or windows — a previewed report is untrusted content.
+        configuration.websiteDataStore = .nonPersistent()
+        let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.underPageBackgroundColor = .textBackgroundColor
         render(in: webView, coordinator: context.coordinator)
         return webView
@@ -36,8 +40,13 @@ struct PreviewView: NSViewRepresentable {
 
         if isHTML {
             if let fileURL {
-                // On-disk HTML: load from disk so relative assets resolve.
-                webView.loadFileURL(fileURL, allowingReadAccessTo: accessRoot)
+                // On-disk HTML: load from disk so relative assets resolve, but
+                // grant file:// read access only to the file's *own* directory,
+                // not the whole workspace — an untrusted report's script shouldn't
+                // be able to read sibling project files (keys, .env) elsewhere in
+                // the tree via same-origin file: fetches.
+                let readScope = fileURL.deletingLastPathComponent()
+                webView.loadFileURL(fileURL, allowingReadAccessTo: readScope)
             } else {
                 webView.loadHTMLString(text, baseURL: nil)
             }

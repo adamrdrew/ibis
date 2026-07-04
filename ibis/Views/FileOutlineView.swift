@@ -512,8 +512,11 @@ struct FileOutlineView: NSViewRepresentable {
 
         // MARK: - Copy / Cut / Paste of files
 
-        /// True after a Cut, so the next Paste moves rather than copies.
-        private var pasteboardMove = false
+        /// The pasteboard `changeCount` captured at Cut time. A Paste only *moves*
+        /// (rather than copies) if the pasteboard hasn't changed since — otherwise
+        /// a Cut here followed by a Copy in Finder (or any app) would make our
+        /// Paste relocate *their* item out of its home. -1 means "no pending cut".
+        private var cutChangeCount = -1
 
         private var selectedFileNode: FileNode? {
             guard let outlineView, outlineView.selectedRow >= 0 else { return nil }
@@ -536,15 +539,18 @@ struct FileOutlineView: NSViewRepresentable {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.writeObjects([node.url as NSURL])
-            pasteboardMove = cut
+            cutChangeCount = cut ? pasteboard.changeCount : -1
         }
 
         func performPaste() {
             let destination = pasteDestination
-            guard let urls = NSPasteboard.general.readObjects(forClasses: [NSURL.self]) as? [URL],
+            let pasteboard = NSPasteboard.general
+            guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL],
                   !urls.isEmpty else { return }
-            let move = pasteboardMove
-            pasteboardMove = false
+            // Only move if this is exactly the pasteboard our Cut wrote; any
+            // intervening copy (here or in another app) reverts us to a safe copy.
+            let move = cutChangeCount != -1 && pasteboard.changeCount == cutChangeCount
+            cutChangeCount = -1
 
             var affected: Set<URL> = [destination]
             for source in urls {
@@ -599,7 +605,11 @@ extension FileOutlineView.Coordinator: QLPreviewPanelDataSource, QLPreviewPanelD
     }
 
     func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> (any QLPreviewItem)! {
-        selectedFileURLs[index] as NSURL
+        // The selection can shrink underneath an open panel (an FSEvents reload
+        // removes rows) before it re-queries the count, so re-validate the index.
+        let urls = selectedFileURLs
+        guard index >= 0, index < urls.count else { return nil }
+        return urls[index] as NSURL
     }
 
     /// Forward arrow keys to the outline so selection (and the preview) can move

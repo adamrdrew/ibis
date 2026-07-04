@@ -7,7 +7,13 @@ struct WorkspaceRef: Codable, Hashable, Identifiable {
     var path: String
     var isDirectory: Bool
 
-    var id: String { path }
+    /// Identity is the *canonical* path (symlinks resolved, no trailing slash) so
+    /// the same folder opened two ways — `/tmp/p` vs `/private/tmp/p`, with or
+    /// without a trailing slash — resolves to one window instead of spawning a
+    /// duplicate workspace (each with its own document cache, so edits to the same
+    /// file in both would clobber). Equality/hashing key off this too, so SwiftUI's
+    /// `WindowGroup(for:)` de-dupes and focuses the existing window.
+    var id: String { Self.canonical(path) }
     var url: URL { URL(filePath: path) }
 
     init(path: String, isDirectory: Bool) {
@@ -19,4 +25,14 @@ struct WorkspaceRef: Codable, Hashable, Identifiable {
         self.path = url.path(percentEncoded: false)
         self.isDirectory = isDirectory
     }
+
+    static func canonical(_ path: String) -> String {
+        var resolved = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
+        if resolved.count > 1, resolved.hasSuffix("/") { resolved.removeLast() }
+        return resolved
+    }
+
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    static func == (lhs: WorkspaceRef, rhs: WorkspaceRef) -> Bool { lhs.id == rhs.id }
 }

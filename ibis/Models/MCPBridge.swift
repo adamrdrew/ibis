@@ -185,7 +185,10 @@ final class MCPBridge {
         }
         let approved = await workspace.awaitDiffDecision(proposal)
         if approved {
-            await workspace.applyProposedEdit(url: url, content: after)
+            let saved = await workspace.applyProposedEdit(url: url, content: after)
+            guard saved else {
+                throw MCPToolFailure("Couldn’t write \(url.lastPathComponent) — it may be read-only, binary, or on an unwritable volume. Nothing was changed.")
+            }
             return "Applied changes to \(url.lastPathComponent) (+\(proposal.added) −\(proposal.removed))."
         }
         return "The human declined the changes to \(url.lastPathComponent)."

@@ -29,12 +29,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         userData: String?,
         error: AutoreleasingUnsafeMutablePointer<NSString>?
     ) {
-        let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL] ?? []
-        for url in urls {
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            LaunchRouter.shared.enqueue(WorkspaceRef(url: url, isDirectory: isDirectory))
+        // Only accept on-disk file URLs (a programmatic NSPerformService caller
+        // could otherwise put an http: URL on the pasteboard and open a junk
+        // workspace from its path), and only ones that actually exist.
+        let urls = pasteboard.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL] ?? []
+        var opened = false
+        for url in urls where url.isFileURL {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) else { continue }
+            LaunchRouter.shared.enqueue(WorkspaceRef(url: url, isDirectory: isDirectory.boolValue))
+            opened = true
         }
-        if !urls.isEmpty {
+        if opened {
             NSApp.activate(ignoringOtherApps: true)
         }
     }

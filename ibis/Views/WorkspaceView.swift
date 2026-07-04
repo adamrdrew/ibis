@@ -21,6 +21,7 @@ struct WorkspaceView: View {
     @State private var selectedActionName: String?
 
     @State private var bridge = MCPBridge.shared
+    @State private var router = LaunchRouter.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,7 +72,7 @@ struct WorkspaceView: View {
                 workspace?.pendingAgentLaunch = false
             }
         } message: {
-            Text("“\(workspace?.displayName ?? "This folder")” contains an .ibis.json with environment variables or actions. Ibis applies them to terminals and runs its actions only if you trust it. Don’t trust folders you didn’t create or that came from an untrusted source.")
+            Text(trustPromptMessage)
         }
     }
 
@@ -253,20 +254,9 @@ struct WorkspaceView: View {
                 selection = workspace.rootNode.id
             }
             // Honor an "Open in Agent" request (one-shot; restored windows never
-            // re-launch the agent because they aren't in the pending set). Don't
-            // auto-launch an agent into an untrusted folder (a Shortcut/Siri could
-            // point it at an attacker-staged folder) — defer it until trust is
-            // granted via the prompt.
+            // re-launch the agent because they aren't in the pending set).
             if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL) {
-                if workspace.trustPromptNeeded {
-                    // A trust prompt is about to appear; launch once it's granted.
-                    workspace.pendingAgentLaunch = true
-                } else {
-                    // Trusted, or nothing to trust (no executable .ibis.json) —
-                    // launch now. (An untrusted folder still injects no project
-                    // env, so this can't run the folder's code either way.)
-                    launchAgent(in: workspace)
-                }
+                armAgentLaunch(in: workspace)
             }
         }
         .task(id: selection) {
@@ -274,6 +264,36 @@ struct WorkspaceView: View {
             let document = workspace.document(for: selection)
             await document.loadIfNeeded()
             workspace.layout.activePane?.open(document)
+        }
+        // An "Open in Agent" request for a folder whose window is *already* open
+        // is delivered here (the new-window `.task` above wouldn't re-run). This
+        // both honors that request and stops the flag from lingering to fire on a
+        // later, unrelated open of the folder.
+        .onChange(of: router.agentLaunchSignal) {
+            guard let workspace, router.consumeAgentLaunch(for: workspace.rootURL) else { return }
+            armAgentLaunch(in: workspace)
+        }
+    }
+
+    /// Launches the configured agent for an "Open in Agent" request, but only
+    /// into a *trusted* folder. An agent runs the folder's own auto-executing
+    /// config (hooks, MCP servers) on startup, so an untrusted folder — which a
+    /// Shortcut/Siri call could point at an attacker-staged directory — must be
+    /// trusted first. Defers the launch behind the trust prompt otherwise.
+    private var trustPromptMessage: String {
+        let name = workspace?.displayName ?? "This folder"
+        if workspace?.pendingAgentLaunch == true {
+            return "You asked to open “\(name)” in an agent. The agent can run this folder’s own configuration (hooks, MCP servers, tasks) as soon as it starts. Trust it only if you created it or it came from a source you trust."
+        }
+        return "“\(name)” contains an .ibis.json with environment variables or actions. Ibis applies them to terminals and runs its actions only if you trust it. Don’t trust folders you didn’t create or that came from an untrusted source."
+    }
+
+    private func armAgentLaunch(in workspace: Workspace) {
+        if workspace.isTrusted {
+            launchAgent(in: workspace)
+        } else {
+            workspace.pendingAgentLaunch = true
+            workspace.trustPromptNeeded = true
         }
     }
 

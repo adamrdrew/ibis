@@ -93,7 +93,13 @@ final class OpenDocument: Identifiable {
     init(url: URL) {
         self.url = url
         self.format = Self.format(forExtension: url.pathExtension)
-        self.showsPreview = format != .source
+        // Markdown opens rendered (its preview is CSP-locked and can't execute
+        // page scripts). A file-backed *HTML* document opens as source, because
+        // rendering it runs its JavaScript — a single click on an .html file from
+        // an untrusted repo shouldn't auto-execute it. The user can switch to
+        // Preview explicitly. (Agent-authored ephemeral HTML uses the other
+        // initializer and still renders.)
+        self.showsPreview = format == .markdown
     }
 
     /// A new, empty, untitled buffer. Nothing to read from disk, so it's already
@@ -148,16 +154,28 @@ final class OpenDocument: Identifiable {
         editGeneration += 1
     }
 
+    /// In-flight load, so overlapping `loadIfNeeded` calls (a file-browser click
+    /// and the selection `.task` fire for the same click) share one read instead
+    /// of both applying — the second apply would otherwise clobber any character
+    /// typed after the first completed.
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+
     func loadIfNeeded() async {
+        if let loadTask { return await loadTask.value }
         guard !isLoaded, let fileURL = url else {
             isLoaded = true
             return
         }
-        let outcome = await Task.detached(priority: .userInitiated) {
-            OpenDocument.read(fileURL)
-        }.value
-        apply(outcome)
-        isLoaded = true
+        let task = Task { @MainActor in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                OpenDocument.read(fileURL)
+            }.value
+            self.apply(outcome)
+            self.isLoaded = true
+            self.loadTask = nil
+        }
+        loadTask = task
+        await task.value
     }
 
     /// Applies a read outcome to the document's state.
@@ -183,6 +201,20 @@ final class OpenDocument: Identifiable {
             loadError = message
         }
         hasExternalChanges = false
+    }
+
+    /// Adopts a file the buffer was just written to (Save As): retargets the
+    /// document at `url` and records the on-disk modification date/size, so the
+    /// FSEvents watcher doesn't mistake our own write for an external change and
+    /// re-read (or warn) over it. The caller has already written `text` to `url`.
+    func adoptSavedFile(at url: URL) {
+        assignURL(url)
+        isDirty = false
+        hasExternalChanges = false
+        let values = try? url.resolvingSymlinksInPath()
+            .resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+        fileModificationDate = values?.contentModificationDate
+        fileSize = values?.fileSize
     }
 
     /// Saves to disk. Returns `false` for an untitled document (no URL yet) —
@@ -218,13 +250,22 @@ final class OpenDocument: Identifiable {
         }
     }
 
-    /// Re-reads the file from disk, discarding unsaved edits. No-op for an
-    /// untitled document. Uses the same read path as the initial load.
-    func revertToSaved() async {
+    /// Re-reads the file from disk. No-op for an untitled document. Uses the same
+    /// read path as the initial load. `force` reflects an explicit user "Revert"
+    /// (discard my edits); the automatic reconcile path passes `force == false`
+    /// so an edit that lands *during* the async read isn't silently overwritten.
+    func revertToSaved(force: Bool = false) async {
         guard let fileURL = url else { return }
+        let generation = editGeneration
         let outcome = await Task.detached(priority: .userInitiated) {
             OpenDocument.read(fileURL)
         }.value
+        // A keystroke arrived while we were reading disk: keep the user's edits
+        // and flag the divergence instead of dropping them.
+        guard force || editGeneration == generation else {
+            hasExternalChanges = true
+            return
+        }
         apply(outcome)
         isDirty = false
     }

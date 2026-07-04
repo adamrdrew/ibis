@@ -5,10 +5,23 @@ import AppKit
 /// security-scoped subtree. The FSEvents watcher refreshes the tree, and callers
 /// also reload the affected directory for immediacy.
 enum FileOperations {
+    enum RenameError: LocalizedError {
+        case invalidName
+        var errorDescription: String? {
+            "A name can’t contain “/” or be “.” or “..”."
+        }
+    }
+
     @discardableResult
     static func rename(_ url: URL, to newName: String) throws -> URL {
         let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != url.lastPathComponent else { return url }
+        // A rename must stay a rename: reject path separators and `.`/`..` so it
+        // can't relocate the item out of its directory (e.g. "../secret") or land
+        // it in an arbitrary subpath ("a/b").
+        guard !trimmed.contains("/"), trimmed != ".", trimmed != ".." else {
+            throw RenameError.invalidName
+        }
         let destination = url.deletingLastPathComponent().appendingPathComponent(trimmed)
         try FileManager.default.moveItem(at: url, to: destination)
         return destination

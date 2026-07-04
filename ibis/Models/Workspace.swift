@@ -75,6 +75,14 @@ final class Workspace {
     /// Presents `proposal` and suspends until the human applies or discards it.
     func awaitDiffDecision(_ proposal: DiffProposal) async -> Bool {
         await withCheckedContinuation { continuation in
+            // If a decision is somehow already pending, resolve it as declined
+            // rather than dropping its continuation — an abandoned
+            // CheckedContinuation would hang that MCP call forever and trip a
+            // runtime check.
+            if let existing = pendingDiffDecision {
+                pendingDiffDecision = nil
+                existing.resume(returning: false)
+            }
             pendingDiffDecision = continuation
             pendingDiff = proposal
         }
@@ -89,14 +97,18 @@ final class Workspace {
     }
 
     /// Applies approved content to the file: into the open buffer (so the editor
-    /// shows it and undo works), then saved to disk.
-    func applyProposedEdit(url: URL, content: String) async {
+    /// shows it and undo works), then saved to disk. Returns whether the save
+    /// actually succeeded, so the caller doesn't report success on a read-only or
+    /// unwritable file. A non-editable document is left untouched.
+    @discardableResult
+    func applyProposedEdit(url: URL, content: String) async -> Bool {
         let document = document(for: url)
         await document.loadIfNeeded()
+        guard document.isEditable else { return false }
         document.text = content
         document.isDirty = true
         layout.activePane?.open(document)
-        await document.save()
+        return await document.save()
     }
 
     /// The already-open document for a URL, if any (without creating one).
@@ -294,9 +306,15 @@ final class Workspace {
                 await document.loadIfNeeded()
                 pane.open(document)
             }
+            // Resolve the selection by *path*, not by index: missing files are
+            // skipped above, so the persisted index no longer lines up with the
+            // (compacted) surviving tabs and would select the wrong file.
             let selectedIndex = paneIndex < state.selectedTabPerPane.count ? state.selectedTabPerPane[paneIndex] : -1
-            if selectedIndex >= 0, selectedIndex < pane.tabDocuments.count {
-                pane.selectedID = pane.tabDocuments[selectedIndex].id
+            if selectedIndex >= 0, selectedIndex < paths.count {
+                let selectedPath = URL(filePath: paths[selectedIndex]).path(percentEncoded: false)
+                if let match = pane.tabDocuments.first(where: { $0.url?.path(percentEncoded: false) == selectedPath }) {
+                    pane.selectedID = match.id
+                }
             }
             panes.append(pane)
         }
@@ -371,6 +389,16 @@ final class Workspace {
     /// Returns whether it was saved.
     @discardableResult
     func saveAs(_ document: OpenDocument) -> Bool {
+        // The in-memory text of a read-only (non-UTF-8) or binary document does
+        // not faithfully represent the file — it's a lossy U+FFFD decode, or empty
+        // for a binary. Writing it out would corrupt/blank the destination, and
+        // the panel defaults to the original file's own name and folder, so refuse
+        // rather than offer a one-click way to overwrite the source with garbage.
+        guard document.isEditable else {
+            presentError("“\(document.name)” can’t be saved because it isn’t editable text (it’s read-only or binary). Copy it in Finder instead.")
+            return false
+        }
+
         let panel = NSSavePanel()
         panel.nameFieldStringValue = document.name
         panel.directoryURL = document.url?.deletingLastPathComponent()
@@ -383,8 +411,16 @@ final class Workspace {
             presentError("Couldn’t save “\(url.lastPathComponent)”: \(error.localizedDescription)")
             return false
         }
-        document.assignURL(url)
-        document.isDirty = false
+        // If a *different* document already backed this URL, retire it: point its
+        // open tabs at this now-authoritative document so one file isn't split
+        // across two divergent buffers (whichever saved last would clobber the
+        // other). Its stale cache key is dropped by rekeyDocumentCache below.
+        if let displaced = documentCache[url], displaced !== document {
+            for pane in layout.panes { pane.replace(displaced, with: document) }
+        }
+        // Adopt the file and record its on-disk metadata so our own write isn't
+        // later flagged as an external change.
+        document.adoptSavedFile(at: url)
         documentCache[url] = document
         // Drop any stale key the document was previously cached under, so its old
         // URL doesn't keep returning this now-retargeted document.
@@ -600,7 +636,7 @@ final class Workspace {
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             if response == .alertFirstButtonReturn {
-                Task { await document.revertToSaved() }
+                Task { await document.revertToSaved(force: true) }
             }
         }
     }
@@ -680,8 +716,11 @@ final class Workspace {
         try? projectConfig.save()
         if isTrusted {
             applyProjectEnv()
-        } else if projectConfig.hasExecutableContent
-            && !WorkspaceTrust.hasDecision(projectRoot) {
+        } else if projectConfig.hasExecutableContent {
+            // Re-raise the trust prompt whenever an untrusted folder's config
+            // carries executable content — including a folder the user earlier
+            // declined. Otherwise "Don't Trust" (or a reflexive Esc on the alert)
+            // is a permanent dead-end with no UI to ever enable env/actions.
             trustPromptNeeded = true
         }
     }

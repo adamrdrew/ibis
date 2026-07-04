@@ -39,13 +39,17 @@ final class GitStatusModel {
                 Self.runStatus(root: root)
             }.value
             if Task.isCancelled { return }
-            self.info = info
+            // A nil result means the probe was killed by the watchdog (indeterminate),
+            // not that the folder stopped being a repo — keep the last-known status
+            // rather than flashing "not a git repository" in the status bar.
+            if let info { self.info = info }
         }
     }
 
-    /// Runs `git status --porcelain=v2 --branch` and parses it. A non-zero exit
-    /// (or missing `git`) means "not a repository".
-    nonisolated private static func runStatus(root: URL) -> Info {
+    /// Runs `git status --porcelain=v2 --branch` and parses it. A clean non-zero
+    /// exit (or missing `git`) means "not a repository"; `nil` means the probe was
+    /// killed (e.g. the watchdog fired), so the caller should keep the old status.
+    nonisolated private static func runStatus(root: URL) -> Info? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = [
@@ -67,6 +71,7 @@ final class GitStatusModel {
         } catch {
             return Info()
         }
+        var timedOut = false
 
         // Drain both pipes concurrently: if git writes a lot to stderr (many
         // `warning:` lines) while we only read stdout, it can block on a full
@@ -86,13 +91,16 @@ final class GitStatusModel {
 
         // Bound a git that hangs (e.g. blocked on an index lock) so slow/stuck
         // invocations during an FSEvents storm can't pile up indefinitely.
-        let watchdog = DispatchWorkItem { process.terminate() }
+        let watchdog = DispatchWorkItem { timedOut = true; process.terminate() }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
 
         process.waitUntilExit()
         watchdog.cancel()
         group.wait()
 
+        // Killed by the watchdog (or any signal): status indeterminate, don't
+        // report it as "not a repository".
+        if timedOut || process.terminationReason == .uncaughtSignal { return nil }
         guard process.terminationStatus == 0 else { return Info() }
         return parse(String(data: outData, encoding: .utf8) ?? "")
     }

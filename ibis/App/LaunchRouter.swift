@@ -12,11 +12,17 @@ final class LaunchRouter {
 
     private(set) var pending: [WorkspaceRef] = []
 
-    /// Roots (by path) that should launch the configured agent once their
-    /// window opens. Kept separate from `WorkspaceRef` so the window's
+    /// Roots (by canonical path) that should launch the configured agent once
+    /// their window opens. Kept separate from `WorkspaceRef` so the window's
     /// restoration identity is unchanged and restored windows never re-run the
-    /// agent. Consumed once by the opening workspace.
+    /// agent. Consumed exactly once by the target workspace.
     private var pendingAgentLaunches: Set<String> = []
+
+    /// Bumped whenever an agent launch is requested, so an *already-open* window
+    /// for the target folder can observe it and consume the request itself — a
+    /// new window's `.task` alone would miss it (opening an existing window just
+    /// focuses it), stranding the flag to later fire on an unrelated open.
+    private(set) var agentLaunchSignal = 0
 
     /// Observable signal that a drain is needed. Views observe this in `onChange`.
     var pendingCount: Int { pending.count }
@@ -25,7 +31,10 @@ final class LaunchRouter {
 
     func enqueue(_ ref: WorkspaceRef, runAgent: Bool = false) {
         pending.append(ref)
-        if runAgent { pendingAgentLaunches.insert(ref.path) }
+        if runAgent {
+            pendingAgentLaunches.insert(WorkspaceRef.canonical(ref.path))
+            agentLaunchSignal &+= 1
+        }
     }
 
     /// Returns and clears all queued workspaces.
@@ -38,6 +47,6 @@ final class LaunchRouter {
     /// Returns whether the given root was enqueued with an agent launch,
     /// consuming the request so it fires exactly once.
     func consumeAgentLaunch(for url: URL) -> Bool {
-        pendingAgentLaunches.remove(url.path(percentEncoded: false)) != nil
+        pendingAgentLaunches.remove(WorkspaceRef.canonical(url.path(percentEncoded: false))) != nil
     }
 }
