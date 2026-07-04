@@ -112,4 +112,72 @@ import Foundation
             #expect(throws: (any Error).self) { try config.save() }
         }
     }
+
+    @Test func unreadableFileSetsLoadErrorAndBlocksSave() throws {
+        try TestSupport.withTempDir { dir in
+            let file = dir.appending(path: ".ibis.json")
+            try #"{"env": {"REAL": "config"}}"#.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+
+            let config = ProjectConfig(root: dir)
+            #expect(config.loadError != nil)
+            // Saving must refuse rather than replace the user's real (unreadable) file.
+            #expect(throws: (any Error).self) { try config.save() }
+        }
+    }
+
+    @Test func laterDuplicateEnvKeysWin() throws {
+        try TestSupport.withTempDir { dir in
+            let config = ProjectConfig(root: dir)
+            config.envVars = [
+                ProjectConfig.EnvVar(key: "DUP", value: "first"),
+                ProjectConfig.EnvVar(key: "DUP", value: "second"),
+            ]
+            #expect(config.environment == ["DUP": "second"])
+        }
+    }
+
+    @Test func unknownTopLevelKeysSurviveASaveRoundTrip() throws {
+        try TestSupport.withTempDir { dir in
+            let original = #"{"env": {"A": "1"}, "futureSetting": {"nested": true}}"#
+            try original.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
+
+            let config = ProjectConfig(root: dir)
+            config.envVars.append(ProjectConfig.EnvVar(key: "B", value: "2"))
+            try config.save()
+
+            let raw = try String(contentsOf: dir.appending(path: ".ibis.json"), encoding: .utf8)
+            #expect(raw.contains("futureSetting"))
+            #expect(raw.contains("\"B\""))
+        }
+    }
+
+    @Test func savedConfigIsOwnerOnly() throws {
+        try TestSupport.withTempDir { dir in
+            let config = ProjectConfig(root: dir)
+            config.envVars = [ProjectConfig.EnvVar(key: "SECRET", value: "s3cret")]
+            try config.save()
+            let attrs = try FileManager.default.attributesOfItem(
+                atPath: dir.appending(path: ".ibis.json").path(percentEncoded: false)
+            )
+            #expect((attrs[.posixPermissions] as? NSNumber)?.intValue == 0o600)
+        }
+    }
+
+    @Test func savingAnEmptyConfigRemovesTheSections() throws {
+        try TestSupport.withTempDir { dir in
+            let config = ProjectConfig(root: dir)
+            config.envVars = [ProjectConfig.EnvVar(key: "A", value: "1")]
+            config.actions = [ProjectConfig.Action(name: "N", command: "c")]
+            try config.save()
+
+            config.envVars = []
+            config.actions = []
+            try config.save()
+            let raw = try String(contentsOf: dir.appending(path: ".ibis.json"), encoding: .utf8)
+            #expect(!raw.contains("\"env\""))
+            #expect(!raw.contains("\"actions\""))
+        }
+    }
 }

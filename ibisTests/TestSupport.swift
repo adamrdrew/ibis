@@ -30,13 +30,47 @@ enum TestSupport {
     /// value (or removes it if it didn't exist), so persistence tests stay
     /// hermetic and can't pollute the standard suite.
     static func withPreservedDefault<T>(_ key: String, _ body: () throws -> T) rethrows -> T {
-        let prior = UserDefaults.standard.object(forKey: key)
+        try withPreservedDefaults([key], body)
+    }
+
+    /// Multi-key variant of `withPreservedDefault`.
+    static func withPreservedDefaults<T>(_ keys: [String], _ body: () throws -> T) rethrows -> T {
+        let priors = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         defer {
-            if let prior { UserDefaults.standard.set(prior, forKey: key) }
-            else { UserDefaults.standard.removeObject(forKey: key) }
+            for (key, prior) in priors {
+                if let prior { UserDefaults.standard.set(prior, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
         }
         // Start from a clean slate so leftover state can't mask a bug.
-        UserDefaults.standard.removeObject(forKey: key)
+        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
         return try body()
+    }
+
+    /// Async variant of `withPreservedDefaults`, for suites that await while
+    /// holding the preserved keys.
+    static func withPreservedDefaults<T>(_ keys: [String], _ body: () async throws -> T) async rethrows -> T {
+        let priors = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
+        defer {
+            for (key, prior) in priors {
+                if let prior { UserDefaults.standard.set(prior, forKey: key) }
+                else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
+        return try await body()
+    }
+
+    /// Polls `condition` on the main actor until it's true or `timeout` seconds
+    /// elapse, yielding between checks so detached work (loads, searches, git
+    /// probes) can land. Returns whether the condition became true.
+    @MainActor
+    static func waitUntil(timeout: TimeInterval = 10, _ condition: () -> Bool) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        while ContinuousClock.now < deadline {
+            if condition() { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return condition()
     }
 }

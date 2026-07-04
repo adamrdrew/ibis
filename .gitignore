@@ -2,4 +2,6 @@
 DerivedData/
 build/
 *.xcuserstate
+xcuserdata/
+*.xcresult
 .mcp.json

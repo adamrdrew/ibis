@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Cancel superseded runs on the same ref (e.g. rapid PR pushes).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & Test
+    # Ibis targets macOS 27, so the tests can only *run* on a macOS 27+ runner
+    # (the test-host app's minimum-OS is 27; it won't launch on an older OS even
+    # with the right SDK). If GitHub's hosted image isn't macOS 27 yet, change
+    # `runs-on` to a self-hosted runner on a macOS 27 machine — e.g.
+    #   runs-on: [self-hosted, macOS]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin the toolchain. Requires Xcode 27 to be installed on the runner;
+      # remove this step on a self-hosted runner where it's already selected.
+      - name: Select Xcode 27
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '27.0'
+
+      - name: Show toolchain
+        run: xcodebuild -version
+
+      # Resolve SPM dependencies up front (uses the committed Package.resolved).
+      - name: Resolve Swift packages
+        run: xcodebuild -resolvePackageDependencies -project ibis.xcodeproj -scheme ibis
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project ibis.xcodeproj \
+            -scheme ibis \
+            -destination 'platform=macOS' \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO
+
+      # Keep the result bundle for inspection when a run fails.
+      - name: Upload test results
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TestResults
+          path: TestResults.xcresult
+          if-no-files-found: ignore

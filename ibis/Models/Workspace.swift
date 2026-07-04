@@ -226,8 +226,12 @@ final class Workspace {
 
         // Record in the system's Recent Documents (File ▸ Open Recent + Dock
         // menu). Every open path — menu, CLI, Finder, Services, intents — ends
-        // up here, so this is the one central place to note it.
-        NSDocumentController.shared.noteNewRecentDocumentURL(rootURL)
+        // up here, so this is the one central place to note it. Skipped under
+        // the test runner: unit tests construct throwaway workspaces by the
+        // dozen and would flush the user's real recents.
+        if NSClassFromString("XCTestCase") == nil {
+            NSDocumentController.shared.noteNewRecentDocumentURL(rootURL)
+        }
     }
 
     /// Immediately re-reads a directory node (if loaded), for snappy updates

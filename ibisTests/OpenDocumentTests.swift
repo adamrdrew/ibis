@@ -166,4 +166,103 @@ import Foundation
             #expect(doc.isFileMissing)
         }
     }
+
+    @Test func reconcileReloadsACleanBufferAfterExternalChange() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+
+            // Change size too, so the check can't miss on mtime granularity.
+            try "v2 external".write(to: url, atomically: true, encoding: .utf8)
+            await doc.reconcileWithDisk()
+            #expect(doc.text == "v2 external")
+            #expect(doc.hasExternalChanges == false)
+            #expect(doc.isDirty == false)
+        }
+    }
+
+    @Test func reconcileFlagsButKeepsADirtyBufferAfterExternalChange() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "my unsaved work"
+            doc.registerUserEdit()
+
+            try "v2 external".write(to: url, atomically: true, encoding: .utf8)
+            await doc.reconcileWithDisk()
+            // The user's edits survive; the divergence is flagged, not resolved.
+            #expect(doc.text == "my unsaved work")
+            #expect(doc.hasExternalChanges)
+            #expect(doc.isDirty)
+        }
+    }
+
+    @Test func reconcileAfterOurOwnSaveSeesNoChange() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "v2 via ibis"
+            doc.registerUserEdit()
+            _ = await doc.save()
+
+            // Our own write recorded its metadata; reconcile must be a no-op.
+            await doc.reconcileWithDisk()
+            #expect(doc.text == "v2 via ibis")
+            #expect(doc.hasExternalChanges == false)
+            #expect(doc.isFileMissing == false)
+        }
+    }
+
+    @Test func reconcileReappearedFileClearsTheMissingFlag() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "here".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            try FileManager.default.removeItem(at: url)
+            await doc.reconcileWithDisk()
+            #expect(doc.isFileMissing)
+
+            try "back again".write(to: url, atomically: true, encoding: .utf8)
+            await doc.reconcileWithDisk()
+            #expect(doc.isFileMissing == false)
+            #expect(doc.text == "back again")
+        }
+    }
+
+    @Test func assignURLUpdatesNameAndFormat() {
+        let doc = OpenDocument(title: "Draft", text: "# hi", format: .markdown)
+        doc.assignURL(URL(filePath: "/proj/final.html"))
+        #expect(doc.name == "final.html")
+        #expect(doc.format == .html)
+        #expect(doc.isUntitled == false)
+    }
+
+    @Test func loadFailureIsReportedAndBlocksEditing() async {
+        let doc = OpenDocument(url: URL(filePath: "/nonexistent-\(UUID().uuidString).txt"))
+        await doc.loadIfNeeded()
+        #expect(doc.loadError != nil)
+        #expect(doc.isEditable == false)
+    }
+
+    @Test func overlappingLoadsShareOneRead() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "content".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            // Two concurrent loads (a click and its selection task) must not
+            // double-apply — contentVersion advances exactly once.
+            async let first: Void = doc.loadIfNeeded()
+            async let second: Void = doc.loadIfNeeded()
+            _ = await (first, second)
+            #expect(doc.text == "content")
+            #expect(doc.contentVersion == 1)
+        }
+    }
 }

@@ -2,6 +2,7 @@ import Testing
 import Foundation
 @testable import ibis
 
+@MainActor
 @Suite struct LineDiffTests {
     private let fileURL = URL(filePath: "/tmp/example.swift")
 
@@ -42,6 +43,32 @@ import Foundation
         let proposal = LineDiff.proposal(fileURL: fileURL, before: "x", after: "y")
         #expect(proposal?.displayName == "example.swift")
         #expect(proposal?.fileURL == fileURL)
+    }
+
+    @Test func trailingRemovalEmitsRemovedLinesAtTheEnd() {
+        let lines = LineDiff.compute(old: "a\nb\nc\nd", new: "a")
+        #expect(lines.map(\.kind) == [.context, .removed, .removed, .removed])
+        #expect(lines.map(\.text) == ["a", "b", "c", "d"])
+    }
+
+    @Test func trailingAdditionEmitsAddedLinesAtTheEnd() {
+        let lines = LineDiff.compute(old: "a", new: "a\nb\nc")
+        #expect(lines.map(\.kind) == [.context, .added, .added])
+        #expect(lines.map(\.text) == ["a", "b", "c"])
+    }
+
+    @Test func completeRewriteRemovesAllThenAddsAll() {
+        let lines = LineDiff.compute(old: "one\ntwo", new: "three\nfour\nfive")
+        #expect(lines.filter { $0.kind == .removed }.map(\.text) == ["one", "two"])
+        #expect(lines.filter { $0.kind == .added }.map(\.text) == ["three", "four", "five"])
+        #expect(lines.filter { $0.kind == .context }.isEmpty)
+    }
+
+    @Test func emptyToContentIsAllAdds() {
+        // "" splits to one empty line; the empty line is removed, content added.
+        let proposal = LineDiff.proposal(fileURL: fileURL, before: "", after: "a\nb")
+        #expect(proposal != nil)
+        #expect(proposal?.afterText == "a\nb")
     }
 
     @Test func addedAndRemovedCountsMatchLineKinds() {
