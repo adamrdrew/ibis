@@ -49,6 +49,11 @@ final class GitStatusModel {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = [
+            // Neutralize repo-controlled config that lets `git status` execute a
+            // command: opening an untrusted repo (e.g. an extracted archive with
+            // a hostile `.git/config`) must not run its `core.fsmonitor` hook.
+            "-c", "core.fsmonitor=",
+            "-c", "core.untrackedCache=false",
             "-C", root.path(percentEncoded: false),
             "status", "--porcelain=v2", "--branch",
         ]
@@ -63,12 +68,33 @@ final class GitStatusModel {
             return Info()
         }
 
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+        // Drain both pipes concurrently: if git writes a lot to stderr (many
+        // `warning:` lines) while we only read stdout, it can block on a full
+        // stderr pipe and never close stdout, hanging the reader forever.
+        let group = DispatchGroup()
+        var outData = Data()
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            outData = out.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .utility).async {
+            _ = err.fileHandleForReading.readDataToEndOfFile()
+            group.leave()
+        }
+
+        // Bound a git that hangs (e.g. blocked on an index lock) so slow/stuck
+        // invocations during an FSEvents storm can't pile up indefinitely.
+        let watchdog = DispatchWorkItem { process.terminate() }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
+
         process.waitUntilExit()
-        _ = err.fileHandleForReading.readDataToEndOfFile()
+        watchdog.cancel()
+        group.wait()
 
         guard process.terminationStatus == 0 else { return Info() }
-        return parse(String(data: data, encoding: .utf8) ?? "")
+        return parse(String(data: outData, encoding: .utf8) ?? "")
     }
 
     nonisolated private static func parse(_ output: String) -> Info {

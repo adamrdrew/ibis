@@ -49,11 +49,11 @@ struct StatusBarView: View {
                     HStack(spacing: 8) {
                         if info.ahead > 0 {
                             countBadge("arrow.up", info.ahead)
-                                .help("\(info.ahead) commit(s) to push")
+                                .help("^[\(info.ahead) commit](inflect: true) to push")
                         }
                         if info.behind > 0 {
                             countBadge("arrow.down", info.behind)
-                                .help("\(info.behind) commit(s) to pull")
+                                .help("^[\(info.behind) commit](inflect: true) to pull")
                         }
                     }
                 }

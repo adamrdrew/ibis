@@ -32,6 +32,10 @@ enum MCPConfigWriter {
             "headers": ["Authorization": "Bearer \(token)"]
         ]
         try mergeJSON(at: file, serverKey: "ibis", entry: entry, container: "mcpServers")
+        // The file holds a long-lived bearer token — keep it owner-only and out
+        // of git so a stray `git add .` can't commit/push it.
+        restrictPermissions(file)
+        ensureGitignored(".mcp.json", root: root)
         return Result(path: file, message: "Wrote Ibis MCP server to \(file.lastPathComponent).")
     }
 
@@ -46,6 +50,10 @@ enum MCPConfigWriter {
             "headers": ["Authorization": "Bearer \(token)"]
         ]
         try mergeJSON(at: file, serverKey: "ibis", entry: entry, container: "mcpServers")
+        // Holds a long-lived bearer token — keep it owner-only and out of git so a
+        // stray `git add .` can't commit/push it (same as .mcp.json).
+        restrictPermissions(file)
+        ensureGitignored(".agents/mcp_config.json", root: root)
         return Result(path: file, message: "Wrote Ibis MCP server to .agents/mcp_config.json.")
     }
 
@@ -87,6 +95,31 @@ enum MCPConfigWriter {
 
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try data.write(to: file, options: .atomic)
+    }
+
+    // MARK: - Hardening
+
+    /// Restricts a written config file to owner read/write (0600) since it holds
+    /// a bearer token.
+    private static func restrictPermissions(_ file: URL) {
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: file.path(percentEncoded: false)
+        )
+    }
+
+    /// Appends `entry` to the project's `.gitignore` (creating it if needed) so a
+    /// token-bearing config file never gets committed. Idempotent, additive only.
+    private static func ensureGitignored(_ entry: String, root: URL) {
+        let gitignore = root.appending(path: ".gitignore")
+        var contents = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
+        let alreadyListed = contents
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .contains { $0.trimmingCharacters(in: .whitespaces) == entry }
+        guard !alreadyListed else { return }
+        if !contents.isEmpty && !contents.hasSuffix("\n") { contents += "\n" }
+        contents += entry + "\n"
+        try? contents.write(to: gitignore, atomically: true, encoding: .utf8)
     }
 
     // MARK: - TOML table merge

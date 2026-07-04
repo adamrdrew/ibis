@@ -190,12 +190,16 @@ private struct MCPSettingsView: View {
                             Label("Running on 127.0.0.1:\(port)", systemImage: "circle.fill")
                                 .foregroundStyle(.green)
                                 .labelStyle(.titleAndIcon)
+                        } else if let error = MCPService.startError, settings.mcpEnabled {
+                            Label(error, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.red)
+                                .labelStyle(.titleAndIcon)
                         } else {
                             Text("Stopped").foregroundStyle(.secondary)
                         }
                     }
 
-                    TextField("Preferred Port", value: $settings.mcpPort, format: .number.grouping(.never))
+                    TextField("Preferred Port (0 = automatic)", value: $settings.mcpPort, format: .number.grouping(.never))
                         .onChange(of: settings.mcpPort) { _, _ in
                             if settings.mcpEnabled { MCPService.restart(settings: settings) }
                         }

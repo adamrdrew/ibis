@@ -32,14 +32,22 @@ private struct TerminalTabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    Image(systemName: "terminal")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
 
-            Text(session.title)
-                .lineLimit(1)
-                .font(.callout)
-                .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    Text(session.title)
+                        .lineLimit(1)
+                        .font(.callout)
+                        .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
+            .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
 
             trailing
                 .frame(width: 14, height: 14)
@@ -54,8 +62,6 @@ private struct TerminalTabItemView: View {
                     .frame(height: 2)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         .onHover { isHovering = $0 }
     }
 

@@ -87,7 +87,8 @@ struct TerminalDockView: View {
             )
             // Action (run) sessions just show their final output when done —
             // no "Shell exited — Restart" affordance (that's for shells/agents).
-            if !session.isRunning && session.role != .run {
+            // `hasStarted` avoids a flash before the deferred first start runs.
+            if session.hasStarted && !session.isRunning && session.role != .run {
                 TerminalExitedOverlay(
                     session: session,
                     isActive: isActive,
@@ -116,8 +117,10 @@ private struct TerminalExitedOverlay: View {
 
     var body: some View {
         ZStack {
+            // A material scrim adapts to light/dark, unlike a hardcoded black wash
+            // which reads as a foreign dark overlay in light mode.
             Rectangle()
-                .fill(.black.opacity(0.35))
+                .fill(.regularMaterial)
 
             VStack(spacing: 12) {
                 Image(systemName: "power")

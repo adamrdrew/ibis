@@ -80,6 +80,12 @@ struct IbisCommands: Commands {
 
             Button("Share…") { shareActiveDocument() }
                 .disabled(workspace?.activeDocument?.url == nil)
+
+            Divider()
+
+            Button("Print…") { workspace?.printActiveDocument() }
+                .keyboardShortcut("p")
+                .disabled(workspace?.activeDocument == nil)
         }
 
         // Standard Edit menu Find/Replace/Spelling, routed to the focused editor.
@@ -88,10 +94,10 @@ struct IbisCommands: Commands {
         // Show/Hide Sidebar.
         SidebarCommands()
 
-        // MARK: Help
-        CommandGroup(replacing: .help) {
+        // MARK: Help — add to the standard Help menu rather than replacing it, so
+        // "Ibis Help" and the system Help search (⇧⌘/) are preserved.
+        CommandGroup(after: .help) {
             Button("Keyboard Shortcuts") { openWindow(id: shortcutsWindowID) }
-                .keyboardShortcut("/", modifiers: [.command, .shift])
         }
 
         // MARK: View additions
@@ -155,14 +161,15 @@ struct IbisCommands: Commands {
         // MARK: Project
         CommandMenu("Project") {
             if let workspace {
-                ForEach(workspace.projectConfig.runnableActions) { action in
+                ForEach(workspace.availableActions) { action in
                     Button("Run \(action.name)") { workspace.runProjectAction(action) }
                         .disabled(workspace.isActionRunning)
+                        .help(action.command)
                 }
                 if workspace.isActionRunning {
                     Button("Stop Running Action") { workspace.stopProjectAction() }
                 }
-                if !workspace.projectConfig.runnableActions.isEmpty {
+                if !workspace.availableActions.isEmpty {
                     Divider()
                 }
             }

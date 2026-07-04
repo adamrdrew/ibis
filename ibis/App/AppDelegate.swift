@@ -49,4 +49,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
         true
     }
+
+    /// Confirm unsaved changes before the app quits (⌘Q / logout / shutdown).
+    /// `NSApplication` termination never calls `windowShouldClose`, so without
+    /// this every dirty editor in every window would be discarded silently.
+    @MainActor
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let dirtyWorkspaces = Workspace.all.filter { !$0.dirtyDocuments.isEmpty }
+        guard !dirtyWorkspaces.isEmpty else { return .terminateNow }
+        // Ask each window in turn; a cancel (or failed save) aborts the quit.
+        Task { @MainActor in
+            for workspace in dirtyWorkspaces {
+                let proceed = await workspace.confirmCloseForQuit()
+                guard proceed else {
+                    sender.reply(toApplicationShouldTerminate: false)
+                    return
+                }
+            }
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
 }

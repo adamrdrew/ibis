@@ -106,11 +106,15 @@ final class MCPServerController {
 
     private(set) var isRunning = false
     private(set) var activePort = 0
+    /// Set when the listener failed to start (e.g. the port is already taken), so
+    /// the UI can warn instead of silently not listening.
+    private(set) var startError: String?
 
     @ObservationIgnored private var transport: HTTPSSETransport?
 
     func start(preferredPort: Int) {
         guard !isRunning, transport == nil else { return }
+        startError = nil
         let server = IbisMCPServer()
         let transport = HTTPSSETransport(server: server, host: "127.0.0.1", port: preferredPort)
         // Accept any token that belongs to a currently-open project window. The
@@ -130,6 +134,7 @@ final class MCPServerController {
             } catch {
                 self.transport = nil
                 self.isRunning = false
+                self.startError = "Couldn’t start on port \(preferredPort): \(error.localizedDescription)"
             }
         }
     }
@@ -229,6 +234,15 @@ enum MCPService {
     static var runningPort: Int? {
         #if canImport(SwiftMCP)
         MCPServerController.shared.isRunning ? MCPServerController.shared.activePort : nil
+        #else
+        nil
+        #endif
+    }
+
+    /// A start-up error (e.g. the port was already taken), if any.
+    static var startError: String? {
+        #if canImport(SwiftMCP)
+        MCPServerController.shared.startError
         #else
         nil
         #endif

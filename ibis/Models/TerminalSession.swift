@@ -32,6 +32,9 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     var title: String
     /// False once the shell process exits (until restarted).
     private(set) var isRunning = false
+    /// True once the shell has been started at least once, so the "Shell exited"
+    /// overlay doesn't flash before the (deferred) first start runs.
+    private(set) var hasStarted = false
     /// The shell's exit status, once it has exited (nil while running).
     private(set) var exitCode: Int32?
 
@@ -81,8 +84,15 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
         view.font = font
-        startShell(shellOverride: shellOverride, on: view)
         terminalView = view
+        // Start the shell *after* this view-building pass: `startShell` mutates
+        // observed state (title/isRunning/exitCode), which must not happen while
+        // SwiftUI is reading it to render this same frame.
+        let override = shellOverride
+        Task { @MainActor [weak self] in
+            guard let self, !self.hasStarted else { return }
+            self.startShell(shellOverride: override, on: view)
+        }
         return view
     }
 
@@ -119,6 +129,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
             currentDirectory: workingDirectory.path(percentEncoded: false)
         )
         isRunning = true
+        hasStarted = true
     }
 
     // MARK: - LocalProcessTerminalViewDelegate

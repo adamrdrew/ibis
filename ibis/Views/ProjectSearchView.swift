@@ -112,7 +112,9 @@ struct ProjectSearchView: View {
         var parts: [String] = []
         if summary.hitFileLimit { parts.append("Reached the file limit.") }
         if summary.hitMatchLimit { parts.append("Reached the match limit.") }
-        if summary.skippedLargeFiles > 0 { parts.append("Skipped \(summary.skippedLargeFiles) large file(s).") }
+        if summary.skippedLargeFiles > 0 {
+            parts.append(String(localized: "Skipped ^[\(summary.skippedLargeFiles) large file](inflect: true)."))
+        }
         return parts.joined(separator: " ")
     }
 

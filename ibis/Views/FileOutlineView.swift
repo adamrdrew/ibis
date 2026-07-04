@@ -25,6 +25,11 @@ struct FileOutlineView: NSViewRepresentable {
         outlineView.allowsMultipleSelection = false
         outlineView.dataSource = context.coordinator
         outlineView.delegate = context.coordinator
+        // Open on click via the target/action so re-clicking an already-selected
+        // row reopens the file (selection-change alone wouldn't fire, so a file
+        // whose tab was just closed couldn't be reopened by clicking it again).
+        outlineView.target = context.coordinator
+        outlineView.action = #selector(Coordinator.outlineViewClicked(_:))
 
         let column = NSTableColumn(identifier: .init("name"))
         column.resizingMask = .autoresizingMask
@@ -72,6 +77,12 @@ struct FileOutlineView: NSViewRepresentable {
 
         /// The row the context menu was opened on, for the menu's @objc actions.
         private var contextNode: FileNode?
+
+        /// True while a rename is being committed (and its async reload is
+        /// pending), so the Return action and end-editing notification — which
+        /// both fire for one commit — don't run the rename twice (the second run
+        /// would fail against the now-missing old name and flash it back).
+        private var renameInFlight = false
 
         init(workspace: Workspace, selection: Binding<FileNode.ID?>) {
             self.workspace = workspace
@@ -208,6 +219,15 @@ struct FileOutlineView: NSViewRepresentable {
             return cell
         }
 
+        /// A click in the outline: open the clicked file (even if its row was
+        /// already selected). Directory clicks fall through to expand/collapse.
+        @objc func outlineViewClicked(_ sender: NSOutlineView) {
+            let row = sender.clickedRow
+            guard row >= 0, let node = sender.item(atRow: row) as? FileNode, !node.isDirectory else { return }
+            selection.wrappedValue = node.id
+            workspace.openDocument(at: node.url)
+        }
+
         func outlineViewSelectionDidChange(_ notification: Notification) {
             guard let outlineView = notification.object as? NSOutlineView else { return }
             // Keep an open Quick Look panel in sync as selection moves.
@@ -233,16 +253,23 @@ struct FileOutlineView: NSViewRepresentable {
         }
 
         private func performRename(from field: NSTextField) {
-            guard let outlineView, let node = node(forCellSubview: field) else { return }
+            guard !renameInFlight, let node = node(forCellSubview: field) else { return }
             let newName = field.stringValue
             guard newName != node.name else { return }
-            let parent = node.url.deletingLastPathComponent()
-            guard (try? FileOperations.rename(node.url, to: newName)) != nil else {
+            let oldURL = node.url
+            let parent = oldURL.deletingLastPathComponent()
+            guard let newURL = try? FileOperations.rename(oldURL, to: newName) else {
                 field.stringValue = node.name // revert on failure
                 return
             }
-            Task { await workspace.reloadDirectory(at: parent) }
-            _ = outlineView
+            renameInFlight = true
+            // Re-point any open document at the renamed path so a later save
+            // doesn't recreate the file under its old name.
+            workspace.relocateOpenDocuments(from: oldURL, to: newURL)
+            Task {
+                await workspace.reloadDirectory(at: parent)
+                renameInFlight = false
+            }
         }
 
         private func node(forCellSubview view: NSView) -> FileNode? {
@@ -333,11 +360,16 @@ struct FileOutlineView: NSViewRepresentable {
                 let accessed = source.startAccessingSecurityScopedResource()
                 defer { if accessed { source.stopAccessingSecurityScopedResource() } }
 
-                let destination = FileOperations.uniqueURL(in: targetDirectory, baseName: source.lastPathComponent)
                 if move {
-                    try? FileManager.default.moveItem(at: source, to: destination)
+                    // A move onto the folder the item already lives in is a no-op —
+                    // not a " 2" rename (which `uniqueURL` would otherwise produce).
+                    guard !isMoveNoOpOrInvalid(source: source, into: targetDirectory) else { continue }
+                    let destination = FileOperations.uniqueURL(in: targetDirectory, baseName: source.lastPathComponent)
+                    guard (try? FileManager.default.moveItem(at: source, to: destination)) != nil else { continue }
+                    workspace.relocateOpenDocuments(from: source, to: destination)
                     affected.insert(source.deletingLastPathComponent())
                 } else {
+                    let destination = FileOperations.uniqueURL(in: targetDirectory, baseName: source.lastPathComponent)
                     try? FileManager.default.copyItem(at: source, to: destination)
                 }
             }
@@ -348,6 +380,18 @@ struct FileOutlineView: NSViewRepresentable {
                 }
             }
             return true
+        }
+
+        /// Whether moving `source` into `targetDirectory` should be skipped: it's
+        /// already there (a no-op), or the target is the source itself or a
+        /// descendant of it (which would try to move a folder inside itself).
+        private func isMoveNoOpOrInvalid(source: URL, into targetDirectory: URL) -> Bool {
+            let sourcePath = source.standardizedFileURL.path
+            let targetPath = targetDirectory.standardizedFileURL.path
+            let parentPath = source.deletingLastPathComponent().standardizedFileURL.path
+            if parentPath == targetPath { return true }
+            if targetPath == sourcePath || targetPath.hasPrefix(sourcePath + "/") { return true }
+            return false
         }
 
         // MARK: Context menu
@@ -507,11 +551,14 @@ struct FileOutlineView: NSViewRepresentable {
                 let accessed = source.startAccessingSecurityScopedResource()
                 defer { if accessed { source.stopAccessingSecurityScopedResource() } }
 
-                let target = FileOperations.uniqueURL(in: destination, baseName: source.lastPathComponent)
                 if move {
-                    try? FileManager.default.moveItem(at: source, to: target)
+                    guard !isMoveNoOpOrInvalid(source: source, into: destination) else { continue }
+                    let target = FileOperations.uniqueURL(in: destination, baseName: source.lastPathComponent)
+                    guard (try? FileManager.default.moveItem(at: source, to: target)) != nil else { continue }
+                    workspace.relocateOpenDocuments(from: source, to: target)
                     affected.insert(source.deletingLastPathComponent())
                 } else {
+                    let target = FileOperations.uniqueURL(in: destination, baseName: source.lastPathComponent)
                     try? FileManager.default.copyItem(at: source, to: target)
                 }
             }

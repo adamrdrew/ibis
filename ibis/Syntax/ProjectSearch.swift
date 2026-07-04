@@ -49,6 +49,10 @@ enum ProjectSearch {
     private static let maxMatches = 5000
     /// Files larger than this are skipped (and counted) rather than read whole.
     private static let maxFileSize = 2 * 1024 * 1024
+    /// Regex matching is skipped on lines longer than this: a user-supplied
+    /// pattern like `(a+)+$` backtracks catastrophically on a long minified line,
+    /// pinning a thread for minutes. Substring matching has no such limit.
+    private static let maxRegexLineLength = 5000
 
     private enum Matcher {
         case substring(String, NSString.CompareOptions)
@@ -84,7 +88,7 @@ enum ProjectSearch {
 
         guard let enumerator = fileManager.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey],
             options: []
         ) else {
             return SearchResults(files: [], summary: summary)
@@ -96,13 +100,19 @@ enum ProjectSearch {
         while let url = enumerator.nextObject() as? URL {
             if isCancelled() { break }
 
-            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isRegularFileKey, .fileSizeKey])
             if values?.isDirectory ?? false {
                 if ignoredDirectories.contains(url.lastPathComponent) {
                     enumerator.skipDescendants()
                 }
                 continue
             }
+
+            // Only read regular files. A named pipe (FIFO) — which shows up in
+            // some build trees — would otherwise block in open/read until a
+            // writer appears, and the blocked syscall ignores cancellation,
+            // pinning the search task forever.
+            guard values?.isRegularFile ?? false else { continue }
 
             if url.lastPathComponent == ".DS_Store" { continue }
             if let size = values?.fileSize, size > maxFileSize {
@@ -165,8 +175,11 @@ enum ProjectSearch {
         fullString.enumerateSubstrings(
             in: NSRange(location: 0, length: fullString.length),
             options: [.byLines]
-        ) { line, lineRange, _, _ in
+        ) { line, lineRange, _, stop in
             lineNumber += 1
+            // Cancellation can't interrupt a blocked syscall, but it can abandon a
+            // huge file promptly (search runs inside a cancellable Task).
+            if lineNumber % 512 == 0, Task.isCancelled { stop.pointee = true; return }
             guard let line else { return }
             let lineString = line as NSString
             let columnRange: NSRange
@@ -174,6 +187,8 @@ enum ProjectSearch {
             case .substring(let query, let options):
                 columnRange = lineString.range(of: query, options: options)
             case .regex(let regex):
+                // Skip pathologically long lines to bound regex backtracking.
+                guard lineString.length <= maxRegexLineLength else { return }
                 columnRange = regex.firstMatch(
                     in: line,
                     range: NSRange(location: 0, length: lineString.length)

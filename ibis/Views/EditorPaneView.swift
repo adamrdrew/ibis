@@ -70,7 +70,7 @@ struct EditorPaneView: View {
 
             if hasMultiplePanes {
                 Button {
-                    layout.closePane(pane.id)
+                    workspace.requestClosePane(pane)
                 } label: {
                     Image(systemName: "xmark")
                 }
@@ -83,6 +83,22 @@ struct EditorPaneView: View {
         .padding(.horizontal, 8)
         .frame(height: EditorChrome.headerHeight)
         .background(.bar)
+    }
+
+    /// A thin banner above the editor (read-only / changed-on-disk warnings).
+    private func editorNotice(_ message: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+            Text(message)
+                .font(.callout)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
     }
 
     private func previewBinding(for document: OpenDocument) -> Binding<Bool> {
@@ -116,12 +132,22 @@ struct EditorPaneView: View {
                 )
                 .id(document.id)
             } else {
-                CodeEditorView(
-                    document: document,
-                    configuration: configuration,
-                    onActivate: { layout.activePaneID = pane.id },
-                    focusRequest: pane.focusToken
-                )
+                VStack(spacing: 0) {
+                    if let reason = document.readOnlyReason {
+                        editorNotice(reason, systemImage: "lock.fill")
+                    } else if document.hasExternalChanges {
+                        editorNotice(
+                            "This file changed on disk. Saving will overwrite those changes.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                    }
+                    CodeEditorView(
+                        document: document,
+                        configuration: configuration,
+                        onActivate: { layout.activePaneID = pane.id },
+                        focusRequest: pane.focusToken
+                    )
+                }
                 .id(document.id)
             }
         } else {

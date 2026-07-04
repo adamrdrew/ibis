@@ -5,7 +5,17 @@ import AppKit
 /// The live state for a single window: the opened folder (or file), its file
 /// tree, and (in later phases) open tabs and pane layout.
 @Observable
+@MainActor
 final class Workspace {
+    /// Weakly-held registry of every live workspace, so app-wide operations
+    /// (notably quit confirmation) can reach each open window's documents.
+    @ObservationIgnored private static var registry: [WeakWorkspaceBox] = []
+
+    /// All currently-live workspaces (closed windows drop out automatically).
+    static var all: [Workspace] {
+        registry.compactMap(\.value)
+    }
+
     let rootURL: URL
     let isDirectory: Bool
     let rootNode: FileNode
@@ -13,6 +23,23 @@ final class Workspace {
     let terminal: TerminalDock
     let git: GitStatusModel
     let projectConfig: ProjectConfig
+
+    /// The folder used for trust, terminals, git, and project config (the root
+    /// itself for a folder workspace, or a single file's parent folder).
+    let projectRoot: URL
+
+    /// Whether the user has trusted this folder. Until then, Ibis never applies
+    /// the folder's `.ibis.json` environment or exposes its actions, so merely
+    /// opening an untrusted repo can't run code from it.
+    private(set) var isTrusted = false
+
+    /// True when a trust decision is pending (the folder ships executable
+    /// `.ibis.json` content and the user hasn't decided yet). Drives a prompt.
+    var trustPromptNeeded = false
+
+    /// Set when an agent launch was requested for a folder that wasn't yet
+    /// trusted; performed once the user grants trust.
+    var pendingAgentLaunch = false
 
     /// Set by the Project Settings menu command to open the settings sheet.
     var projectSettingsRequested = false
@@ -106,7 +133,16 @@ final class Workspace {
         self.terminal = TerminalDock(workingDirectory: terminalRoot)
         self.git = GitStatusModel(root: terminalRoot)
         self.projectConfig = ProjectConfig(root: terminalRoot)
-        self.terminal.projectEnv = projectConfig.environment
+        self.projectRoot = terminalRoot
+        // Only apply the project environment if the folder is already trusted.
+        let trusted = WorkspaceTrust.isTrusted(terminalRoot)
+        self.isTrusted = trusted
+        self.terminal.projectEnv = trusted ? projectConfig.environment : [:]
+        // Prompt for trust when the folder ships executable config and the user
+        // hasn't decided yet.
+        self.trustPromptNeeded = !trusted
+            && !WorkspaceTrust.hasDecision(terminalRoot)
+            && projectConfig.hasExecutableContent
 
         if isDirectory {
             watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
@@ -117,6 +153,9 @@ final class Workspace {
         }
 
         git.refresh()
+
+        Self.registry.removeAll { $0.value == nil }
+        Self.registry.append(WeakWorkspaceBox(self))
 
         // Record in the system's Recent Documents (File ▸ Open Recent + Dock
         // menu). Every open path — menu, CLI, Finder, Services, intents — ends
@@ -139,6 +178,9 @@ final class Workspace {
         // Any change on disk (including inside .git — commits, branch switches,
         // staging) may affect Git status, so refresh it too.
         git.refresh()
+
+        // Keep open buffers honest about changes made outside Ibis.
+        await reconcileOpenDocuments()
 
         var reloaded = Set<URL>()
         for path in paths {
@@ -294,6 +336,17 @@ final class Workspace {
         document.pendingSelection = ns.lineRange(for: NSRange(location: min(loc, ns.length - 1), length: 0))
     }
 
+    /// Opens (or focuses) the file at `url` as a tab in the active pane. Used by
+    /// a file-browser click, which must reopen a file even when its row is
+    /// already selected (e.g. after its tab was closed).
+    func openDocument(at url: URL) {
+        let document = document(for: url)
+        Task {
+            await document.loadIfNeeded()
+            layout.activePane?.open(document)
+        }
+    }
+
     /// Opens a new, empty, untitled document as a tab in the active pane.
     func newUntitledDocument() {
         let document = OpenDocument()
@@ -303,9 +356,12 @@ final class Workspace {
     func saveActiveDocument() async {
         guard let document = activeDocument else { return }
         if document.isUntitled {
-            saveAs(document)
+            saveAs(document) // presents its own error on failure
         } else {
-            await document.save()
+            let saved = await document.save()
+            if !saved {
+                presentError("Couldn’t save “\(document.name)”. Check that the file is writable and the volume has space.")
+            }
         }
     }
 
@@ -322,13 +378,17 @@ final class Workspace {
         guard panel.runModal() == .OK, let url = panel.url else { return false }
 
         do {
-            try document.text.write(to: url, atomically: true, encoding: .utf8)
+            try document.text.write(to: url.resolvingSymlinksInPath(), atomically: true, encoding: .utf8)
         } catch {
+            presentError("Couldn’t save “\(url.lastPathComponent)”: \(error.localizedDescription)")
             return false
         }
         document.assignURL(url)
         document.isDirty = false
         documentCache[url] = document
+        // Drop any stale key the document was previously cached under, so its old
+        // URL doesn't keep returning this now-retargeted document.
+        rekeyDocumentCache()
         // Keep the pane's selection on this same document (its id is unchanged).
         Task { await reloadDirectory(at: url.deletingLastPathComponent()) }
         return true
@@ -436,7 +496,16 @@ final class Workspace {
 
     /// Closes the active pane, prompting for any of its dirty solo tabs first.
     func closeActivePane() {
-        guard layout.panes.count > 1, let pane = layout.activePane else { return }
+        guard let pane = layout.activePane else { return }
+        requestClosePane(pane)
+    }
+
+    /// Closes a specific pane, prompting to save any of its dirty solo tabs first
+    /// (a document still open in another pane closes without a prompt). Routes
+    /// through the guarded close path so the pane-header × can't silently discard
+    /// unsaved edits.
+    func requestClosePane(_ pane: EditorPane) {
+        guard layout.panes.count > 1 else { return }
         requestCloseTabs(pane.tabDocuments, in: pane) { [weak self] allClosed in
             guard allClosed, let self else { return }
             self.layout.closePane(pane.id)
@@ -459,6 +528,48 @@ final class Workspace {
     private func discardDocument(_ document: OpenDocument) {
         if let url = document.url {
             documentCache.removeValue(forKey: url)
+        }
+    }
+
+    // MARK: - Keeping open documents in sync with the filesystem
+
+    /// After a file/folder is renamed or moved on disk, re-point any open
+    /// documents at their new location (directories move their descendants too)
+    /// and re-key the cache. Without this, a later ⌘S would recreate the file at
+    /// its old path and the edits would be lost. Copies (not moves) are ignored.
+    func relocateOpenDocuments(from oldURL: URL, to newURL: URL) {
+        let oldPath = oldURL.standardizedFileURL.path
+        let newPath = newURL.standardizedFileURL.path
+        var changed = false
+        for document in documentCache.values {
+            guard let docPath = document.url?.standardizedFileURL.path else { continue }
+            if docPath == oldPath {
+                document.assignURL(newURL.standardizedFileURL)
+                changed = true
+            } else if docPath.hasPrefix(oldPath + "/") {
+                let moved = URL(filePath: newPath + docPath.dropFirst(oldPath.count))
+                document.assignURL(moved)
+                changed = true
+            }
+        }
+        if changed { rekeyDocumentCache() }
+    }
+
+    /// Rebuilds the cache so every document is keyed by its *current* URL,
+    /// dropping stale keys left behind by a Save As or a rename/move.
+    private func rekeyDocumentCache() {
+        var rebuilt: [URL: OpenDocument] = [:]
+        for document in documentCache.values {
+            if let url = document.url { rebuilt[url] = document }
+        }
+        documentCache = rebuilt
+    }
+
+    /// Reconciles every open document with disk after external filesystem
+    /// changes: clean buffers reload, dirty buffers get a "changed on disk" flag.
+    private func reconcileOpenDocuments() async {
+        for document in documentCache.values {
+            await document.reconcileWithDisk()
         }
     }
 
@@ -499,10 +610,49 @@ final class Workspace {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Prints the active document via a paginating text view built from its
+    /// current text (independent of which editor, if any, has focus).
+    func printActiveDocument() {
+        guard let document = activeDocument, !document.isBinary else { return }
+        let printInfo = NSPrintInfo.shared
+        let width = printInfo.paperSize.width - printInfo.leftMargin - printInfo.rightMargin
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: max(1, width), height: printInfo.paperSize.height))
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.string = document.text
+        textView.font = NSFont(name: "Menlo", size: 11)
+            ?? .monospacedSystemFont(ofSize: 11, weight: .regular)
+        let operation = NSPrintOperation(view: textView, printInfo: printInfo)
+        operation.jobTitle = document.name
+        if let window = window ?? NSApp.keyWindow {
+            operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            operation.run()
+        }
+    }
+
+    // MARK: - Trust
+
+    /// The actions Ibis will expose/run — none until the folder is trusted.
+    var availableActions: [ProjectConfig.Action] {
+        isTrusted ? projectConfig.runnableActions : []
+    }
+
+    /// Records the user's trust decision. Granting trust applies the project
+    /// environment and performs any agent launch that was waiting on it.
+    func resolveTrust(_ trusted: Bool) {
+        WorkspaceTrust.setTrusted(trusted, for: projectRoot)
+        isTrusted = trusted
+        trustPromptNeeded = false
+        applyProjectEnv()
+    }
+
     // MARK: - Project actions
 
     /// Runs a project action in the shared Run terminal tab (env refreshed).
+    /// No-op for an untrusted folder (the UI hides actions there anyway).
     func runProjectAction(_ action: ProjectConfig.Action) {
+        guard isTrusted else { return }
         terminal.projectEnv = projectConfig.environment
         terminal.runAction(name: action.name, command: action.command)
     }
@@ -516,9 +666,24 @@ final class Workspace {
     }
 
     /// Re-applies project env to the dock after settings change (affects new
-    /// sessions; already-running shells keep their environment).
+    /// sessions; already-running shells keep their environment). Untrusted
+    /// folders contribute no environment.
     func applyProjectEnv() {
-        terminal.projectEnv = projectConfig.environment
+        terminal.projectEnv = isTrusted ? projectConfig.environment : [:]
+    }
+
+    /// Persists edits made in Project Settings, then reconciles trust: a trusted
+    /// folder gets its env applied immediately; an as-yet-undecided folder whose
+    /// config now carries executable content raises the trust prompt, so the
+    /// user's own env/actions aren't silently withheld with no way to enable them.
+    func commitProjectSettings() {
+        try? projectConfig.save()
+        if isTrusted {
+            applyProjectEnv()
+        } else if projectConfig.hasExecutableContent
+            && !WorkspaceTrust.hasDecision(projectRoot) {
+            trustPromptNeeded = true
+        }
     }
 
     // MARK: - Terminal actions
@@ -573,38 +738,95 @@ final class Workspace {
         guard !isPresentingCloseSheet, let window = window ?? NSApp.keyWindow else { return false }
 
         isPresentingCloseSheet = true
-        let message = dirty.count == 1
-            ? "Do you want to save the changes you made to “\(dirty[0].name)”?"
-            : "You have \(dirty.count) documents with unsaved changes."
-        let alert = makeSaveAlert(message: message, informative: "Your changes will be lost if you don’t save them.")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { return }
-            self.isPresentingCloseSheet = false
-            switch response {
-            case .alertFirstButtonReturn: // Save
-                Task { @MainActor in
-                    await self.saveAllForClose(dirty)
-                    proceed()
-                }
-            case .alertThirdButtonReturn: // Don't Save
+        presentCloseConfirmation(dirty, on: window) { [weak self] outcome in
+            self?.isPresentingCloseSheet = false
+            switch outcome {
+            case .discarded, .saved:
                 proceed()
-            default: // Cancel
-                break
+            case .cancelled, .saveFailed:
+                break // keep the window open
             }
         }
         return false
     }
 
-    /// Saves every dirty document before the window closes, routing untitled
-    /// buffers through a Save panel.
-    private func saveAllForClose(_ dirty: [OpenDocument]) async {
-        for document in dirty {
-            if document.isUntitled {
-                _ = saveAs(document)
-            } else {
-                await document.save()
+    /// Confirms and (optionally) saves this window's dirty documents when the app
+    /// is quitting. Returns `true` if the app may proceed to quit this window
+    /// (saved or discarded), `false` if the user cancelled or a save failed.
+    func confirmCloseForQuit() async -> Bool {
+        let dirty = dirtyDocuments
+        guard !dirty.isEmpty else { return true }
+        guard let window = window ?? NSApp.keyWindow else { return true }
+        // Bring the window forward so the user sees which one they're answering.
+        window.makeKeyAndOrderFront(nil)
+        return await withCheckedContinuation { continuation in
+            presentCloseConfirmation(dirty, on: window) { outcome in
+                switch outcome {
+                case .saved, .discarded: continuation.resume(returning: true)
+                case .cancelled, .saveFailed: continuation.resume(returning: false)
+                }
             }
         }
+    }
+
+    private enum CloseOutcome { case saved, discarded, cancelled, saveFailed }
+
+    /// Presents the Save / Cancel / Don't Save sheet and, on Save, writes every
+    /// dirty document — reporting a failure instead of pretending it succeeded.
+    private func presentCloseConfirmation(
+        _ dirty: [OpenDocument],
+        on window: NSWindow,
+        completion: @escaping (CloseOutcome) -> Void
+    ) {
+        let message = dirty.count == 1
+            ? "Do you want to save the changes you made to “\(dirty[0].name)”?"
+            : "You have \(dirty.count) documents with unsaved changes."
+        let alert = makeSaveAlert(message: message, informative: "Your changes will be lost if you don’t save them.")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { completion(.cancelled); return }
+            switch response {
+            case .alertFirstButtonReturn: // Save
+                Task { @MainActor in
+                    if await self.saveAllForClose(dirty) {
+                        completion(.saved)
+                    } else {
+                        self.presentError("Some changes couldn’t be saved, so the window stayed open.")
+                        completion(.saveFailed)
+                    }
+                }
+            case .alertThirdButtonReturn: // Don't Save
+                completion(.discarded)
+            default: // Cancel
+                completion(.cancelled)
+            }
+        }
+    }
+
+    /// Saves every dirty document before the window closes, routing untitled
+    /// buffers through a Save panel. Returns `true` only if *all* saves
+    /// succeeded (a cancelled Save panel or a write failure returns `false`), so
+    /// the caller can keep the window open rather than lose the edits.
+    private func saveAllForClose(_ dirty: [OpenDocument]) async -> Bool {
+        var allSucceeded = true
+        for document in dirty {
+            if document.isUntitled {
+                if !saveAs(document) { allSucceeded = false }
+            } else {
+                let saved = await document.save()
+                if !saved { allSucceeded = false }
+            }
+        }
+        return allSucceeded
+    }
+
+    /// Presents a non-blocking error alert as a sheet on this window.
+    func presentError(_ message: String) {
+        guard let window = window ?? NSApp.keyWindow else { return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = message
+        alert.addButton(withTitle: "OK")
+        alert.beginSheetModal(for: window) { _ in }
     }
 
     /// Builds the standard Save / Cancel / Don't Save alert.
@@ -617,4 +839,10 @@ final class Workspace {
         alert.addButton(withTitle: "Don’t Save")
         return alert
     }
+}
+
+/// Weak reference to a workspace, for the live-workspace registry.
+private struct WeakWorkspaceBox {
+    weak var value: Workspace?
+    init(_ value: Workspace) { self.value = value }
 }

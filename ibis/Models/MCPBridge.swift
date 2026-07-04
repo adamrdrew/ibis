@@ -100,7 +100,7 @@ final class MCPBridge {
 
     func openFile(token: String?, path: String, line: Int?) async throws -> String {
         let workspace = try workspace(for: token)
-        let url = resolve(path, in: workspace)
+        let url = try resolvedURL(for: path, in: workspace)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw MCPToolFailure("There's no file at \(url.path).")
         }
@@ -133,7 +133,7 @@ final class MCPBridge {
 
     private func target(token: String?, path: String) throws -> (Workspace, URL) {
         let workspace = try workspace(for: token)
-        return (workspace, resolve(path, in: workspace))
+        return (workspace, try resolvedURL(for: path, in: workspace))
     }
 
     private func currentContent(of url: URL, in workspace: Workspace) -> String {
@@ -172,7 +172,12 @@ final class MCPBridge {
     }
 
     private func reviewAndApply(in workspace: Workspace, url: URL, before: String, after: String) async throws -> String {
-        guard let proposal = LineDiff.proposal(fileURL: url, before: before, after: after) else {
+        // Myers diff is O((N+M)·D); a wholesale rewrite of a large file could
+        // beachball the app for seconds. Compute it off the main actor.
+        let proposal = await Task.detached(priority: .userInitiated) {
+            LineDiff.proposal(fileURL: url, before: before, after: after)
+        }.value
+        guard let proposal else {
             return "No changes to \(url.lastPathComponent) — the result matches the current file."
         }
         guard workspace.pendingDiff == nil else {
@@ -217,7 +222,7 @@ final class MCPBridge {
 
     func revealInTree(token: String?, path: String) throws -> String {
         let workspace = try workspace(for: token)
-        let url = resolve(path, in: workspace)
+        let url = try resolvedURL(for: path, in: workspace)
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw MCPToolFailure("There's no file at \(url.path).")
         }
@@ -288,6 +293,21 @@ final class MCPBridge {
             return URL(filePath: expanded).standardizedFileURL
         }
         return workspace.rootURL.appending(path: expanded).standardizedFileURL
+    }
+
+    /// Resolves a tool-supplied path and *requires* it to be inside the
+    /// workspace root. An agent (or anyone holding its token) must not be able to
+    /// read/write arbitrary files (`~/.ssh/config`, `~/.zshrc`, …) — including
+    /// via a substring-presence oracle from `propose_patch` error messages — so
+    /// the containment check happens before any file is touched.
+    private func resolvedURL(for path: String, in workspace: Workspace) throws -> URL {
+        let url = resolve(path, in: workspace)
+        let rootPath = workspace.rootURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let resolvedPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        guard resolvedPath == rootPath || resolvedPath.hasPrefix(rootPath + "/") else {
+            throw MCPToolFailure("“\(path)” is outside this project. Ibis only exposes files within the open workspace folder.")
+        }
+        return url
     }
 }
 

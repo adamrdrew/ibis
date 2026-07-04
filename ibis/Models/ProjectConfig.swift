@@ -33,6 +33,15 @@ final class ProjectConfig {
     var actions: [Action] = []
     var envVars: [EnvVar] = []
 
+    /// Set when `.ibis.json` exists but couldn't be parsed. In that state we must
+    /// not treat the config as empty or a Save would overwrite the user's real
+    /// (if malformed) file with nothing. The UI surfaces this and blocks saving.
+    private(set) var loadError: String?
+
+    /// The raw top-level JSON object as last parsed, so unknown keys (settings a
+    /// newer Ibis or the user added) survive a round-trip through Save.
+    @ObservationIgnored private var rawObject: [String: Any] = [:]
+
     let fileURL: URL
     private let root: URL
 
@@ -42,14 +51,39 @@ final class ProjectConfig {
         load()
     }
 
+    /// Environment keys Ibis refuses to inject regardless of trust. These hijack
+    /// shell or dynamic-loader startup — running attacker code *before* the user's
+    /// command — and have no legitimate project-config use, so blocking them is
+    /// defense-in-depth against a trusted repo that later gains a hostile
+    /// `.ibis.json` (e.g. via a merged PR), where the trust prompt won't re-appear.
+    private static let blockedEnvKeys: Set<String> = [
+        "ZDOTDIR", "ENV", "BASH_ENV", "LD_PRELOAD", "LD_LIBRARY_PATH",
+    ]
+
+    /// Whether a key is a code-injection vector we never inject (see above).
+    /// Matches the fixed list plus the whole `DYLD_*` family.
+    static func isBlockedEnvKey(_ key: String) -> Bool {
+        let upper = key.uppercased()
+        return blockedEnvKeys.contains(upper) || upper.hasPrefix("DYLD_")
+    }
+
     /// The environment map to merge into terminal sessions (blank keys dropped;
-    /// later duplicates win).
+    /// code-injection keys dropped; later duplicates win).
     var environment: [String: String] {
         var result: [String: String] = [:]
-        for variable in envVars where !variable.key.trimmingCharacters(in: .whitespaces).isEmpty {
+        for variable in envVars {
+            let key = variable.key.trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, !Self.isBlockedEnvKey(key) else { continue }
             result[variable.key] = variable.value
         }
         return result
+    }
+
+    /// Whether the config carries anything Ibis would execute on the user's
+    /// behalf (environment merged into shells, or runnable actions) — i.e.
+    /// whether opening this folder warrants a trust prompt.
+    var hasExecutableContent: Bool {
+        !environment.isEmpty || !runnableActions.isEmpty
     }
 
     /// Actions that are actually runnable (have a name and a command).
@@ -63,26 +97,59 @@ final class ProjectConfig {
     // MARK: - Persistence
 
     func load() {
-        guard let data = try? Data(contentsOf: fileURL),
-              let file = try? JSONDecoder().decode(ConfigFile.self, from: data) else {
+        guard let data = try? Data(contentsOf: fileURL) else {
+            // File absent → an empty config is the correct state.
             actions = []
             envVars = []
+            rawObject = [:]
+            loadError = nil
             return
         }
+        guard let file = try? JSONDecoder().decode(ConfigFile.self, from: data) else {
+            // File present but unparseable — flag it and leave the model untouched
+            // so a subsequent Save is refused rather than destroying the file.
+            loadError = "The .ibis.json file couldn’t be read (invalid JSON). Fix or delete it before saving from here."
+            return
+        }
+        loadError = nil
+        rawObject = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         actions = file.actions?.map { Action(name: $0.name, command: $0.command) } ?? []
         envVars = (file.env ?? [:])
             .sorted { $0.key < $1.key }
             .map { EnvVar(key: $0.key, value: $0.value) }
     }
 
+    enum SaveError: LocalizedError {
+        case unparseableExisting(String)
+        var errorDescription: String? {
+            switch self { case .unparseableExisting(let m): m }
+        }
+    }
+
     func save() throws {
-        let file = ConfigFile(
-            env: environment.isEmpty ? nil : environment,
-            actions: runnableActions.map { ConfigFile.ActionDTO(name: $0.name, command: $0.command) }
+        // Never overwrite a file we failed to parse — that would silently discard
+        // whatever the user actually had in it.
+        if let loadError { throw SaveError.unparseableExisting(loadError) }
+
+        // Preserve any unknown top-level keys, replacing only env/actions.
+        var object = rawObject
+        let env = environment
+        if env.isEmpty { object.removeValue(forKey: "env") } else { object["env"] = env }
+        let runnable = runnableActions
+        if runnable.isEmpty {
+            object.removeValue(forKey: "actions")
+        } else {
+            object["actions"] = runnable.map { ["name": $0.name, "command": $0.command] }
+        }
+
+        let data = try JSONSerialization.data(
+            withJSONObject: object,
+            options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        try encoder.encode(file).write(to: fileURL, options: .atomic)
+        try data.write(to: fileURL, options: .atomic)
+        // The file can hold environment secrets — keep it owner-only.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path(percentEncoded: false))
+        rawObject = object
         ensureGitignored()
     }
 

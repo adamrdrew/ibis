@@ -30,6 +30,7 @@ enum AgentKind: String, CaseIterable, Identifiable {
 /// User-configurable editor and appearance settings, shared across all windows
 /// through the environment and persisted to `UserDefaults`.
 @Observable
+@MainActor
 final class AppSettings {
     var fontName: String { didSet { defaults.set(fontName, forKey: Key.fontName) } }
     var fontSize: Double { didSet { defaults.set(fontSize, forKey: Key.fontSize) } }
@@ -116,8 +117,19 @@ final class AppSettings {
         agentArgs = defaults.string(forKey: Key.agentArgs) ?? ""
         agentKind = defaults.string(forKey: Key.agentKind).flatMap(AgentKind.init) ?? .claude
         mcpEnabled = defaults.bool(forKey: Key.mcpEnabled)
-        mcpPort = defaults.object(forKey: Key.mcpPort) as? Int ?? 4319
-        mcpToken = defaults.string(forKey: Key.mcpToken) ?? Self.generateToken()
+        // Default to an ephemeral port (0 = OS-assigned): a fixed, well-known port
+        // lets another local process squat it and phish tokens. Configs are
+        // (re)written with the actually-bound port at agent-launch time.
+        mcpPort = defaults.object(forKey: Key.mcpPort) as? Int ?? 0
+        // `didSet` doesn't fire during init, so persist a freshly generated token
+        // explicitly — otherwise it changes every launch and never round-trips.
+        if let storedToken = defaults.string(forKey: Key.mcpToken) {
+            mcpToken = storedToken
+        } else {
+            let generated = Self.generateToken()
+            mcpToken = generated
+            defaults.set(generated, forKey: Key.mcpToken)
+        }
     }
 
     /// A URL-safe random token used as the MCP bearer credential.

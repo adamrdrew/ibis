@@ -50,13 +50,28 @@ struct WorkspaceView: View {
             if let workspace {
                 ProjectSettingsView(
                     config: workspace.projectConfig,
-                    commit: {
-                        try? workspace.projectConfig.save()
-                        workspace.applyProjectEnv()
-                    },
+                    commit: { workspace.commitProjectSettings() },
                     dismiss: { workspace.projectSettingsRequested = false }
                 )
             }
+        }
+        // Folder-trust prompt: shown once when a folder ships executable
+        // .ibis.json content. Until trusted, its environment and actions are
+        // withheld, so opening it can't run code.
+        .alert("Do you trust this folder?", isPresented: trustPromptPresented) {
+            Button("Trust Folder") {
+                workspace?.resolveTrust(true)
+                if let workspace, workspace.pendingAgentLaunch {
+                    workspace.pendingAgentLaunch = false
+                    launchAgent(in: workspace)
+                }
+            }
+            Button("Don’t Trust", role: .cancel) {
+                workspace?.resolveTrust(false)
+                workspace?.pendingAgentLaunch = false
+            }
+        } message: {
+            Text("“\(workspace?.displayName ?? "This folder")” contains an .ibis.json with environment variables or actions. Ibis applies them to terminals and runs its actions only if you trust it. Don’t trust folders you didn’t create or that came from an untrusted source.")
         }
     }
 
@@ -76,10 +91,10 @@ struct WorkspaceView: View {
             // Project action runner — shown only when actions are configured.
             // (The condition lives at the toolbar-content level, not inside a
             // ToolbarItemGroup, where SwiftUI handles `if` unreliably.)
-            if let workspace, !workspace.projectConfig.runnableActions.isEmpty {
+            if let workspace, !workspace.availableActions.isEmpty {
                 ToolbarItemGroup(placement: .navigation) {
                     Picker("Action", selection: $selectedActionName) {
-                        ForEach(workspace.projectConfig.runnableActions) { action in
+                        ForEach(workspace.availableActions) { action in
                             Text(action.name).tag(Optional(action.name))
                         }
                     }
@@ -105,7 +120,11 @@ struct WorkspaceView: View {
                         )
                     }
                     .tint(workspace.terminal.isActionRunning ? .red : nil)
-                    .help(workspace.terminal.isActionRunning ? "Stop the running action" : "Run the selected action")
+                    // Surface the exact command that will run, so a project-supplied
+                    // "Build" action can't hide something like `curl … | sh`.
+                    .help(workspace.terminal.isActionRunning
+                          ? "Stop the running action"
+                          : "Run: \(selectedActionCommand(workspace))")
                 }
             }
 
@@ -139,9 +158,7 @@ struct WorkspaceView: View {
                 .help("Split Editor (⌘\\)")
 
                 Button {
-                    if let document = activeDocument {
-                        Task { await document.save() }
-                    }
+                    if let workspace { Task { await workspace.saveActiveDocument() } }
                 } label: {
                     Label("Save", systemImage: "square.and.arrow.down")
                 }
@@ -166,12 +183,7 @@ struct WorkspaceView: View {
         // ⌘W closes the active tab (a key-window control, so it takes precedence
         // over the built-in window Close). Disabled when no tab is open, so ⌘W
         // then falls through to closing the window.
-        .background {
-            Button("Close Tab") { workspace?.closeActiveTab() }
-                .keyboardShortcut("w", modifiers: .command)
-                .disabled(activeDocument == nil)
-                .hidden()
-        }
+        .background { hiddenKeyboardShortcuts }
         // Confirm unsaved changes before the window closes (as a sheet).
         .background {
             WindowCloseGuard { proceed in workspace?.requestWindowClose(proceed: proceed) ?? true }
@@ -193,7 +205,7 @@ struct WorkspaceView: View {
         }
         // Default the action picker to the first action, keeping it valid as the
         // configured actions change.
-        .onChange(of: workspace?.projectConfig.runnableActions.map(\.name) ?? [], initial: true) { _, names in
+        .onChange(of: workspace?.availableActions.map(\.name) ?? [], initial: true) { _, names in
             if selectedActionName == nil || !(names.contains { $0 == selectedActionName }) {
                 selectedActionName = names.first
             }
@@ -241,11 +253,20 @@ struct WorkspaceView: View {
                 selection = workspace.rootNode.id
             }
             // Honor an "Open in Agent" request (one-shot; restored windows never
-            // re-launch the agent because they aren't in the pending set).
-            if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL),
-               let command = MCPService.launchCommand(settings: settings) {
-                MCPService.bindAgent(to: workspace, settings: settings)
-                workspace.runAgent(command: command, name: settings.agentName)
+            // re-launch the agent because they aren't in the pending set). Don't
+            // auto-launch an agent into an untrusted folder (a Shortcut/Siri could
+            // point it at an attacker-staged folder) — defer it until trust is
+            // granted via the prompt.
+            if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL) {
+                if workspace.trustPromptNeeded {
+                    // A trust prompt is about to appear; launch once it's granted.
+                    workspace.pendingAgentLaunch = true
+                } else {
+                    // Trusted, or nothing to trust (no executable .ibis.json) —
+                    // launch now. (An untrusted folder still injects no project
+                    // env, so this can't run the folder's code either way.)
+                    launchAgent(in: workspace)
+                }
             }
         }
         .task(id: selection) {
@@ -256,18 +277,37 @@ struct WorkspaceView: View {
         }
     }
 
+    /// Hidden key-window controls: these take precedence over menu equivalents
+    /// (⌘W closes the active tab rather than the window; ⌘= zooms in — the menu
+    /// shows ⌘+, which on ANSI layouts is ⇧⌘=, but people press the unshifted =).
+    @ViewBuilder
+    private var hiddenKeyboardShortcuts: some View {
+        Group {
+            Button("Close Tab") { workspace?.closeActiveTab() }
+                .keyboardShortcut("w", modifiers: .command)
+                .disabled(activeDocument == nil)
+
+            Button("Increase Font Size") {
+                settings.fontSize = min(settings.fontSize + 1, 48)
+            }
+            .keyboardShortcut("=", modifiers: .command)
+        }
+        .hidden()
+    }
+
     // MARK: - Sidebar
 
     @ViewBuilder
     private var sidebar: some View {
         if let workspace {
             VStack(spacing: 0) {
-                Picker("", selection: $sidebarMode) {
+                Picker("Sidebar Mode", selection: $sidebarMode) {
                     Label("Files", systemImage: "folder").tag(SidebarMode.files)
                     Label("Search", systemImage: "magnifyingglass").tag(SidebarMode.search)
                 }
                 .pickerStyle(.segmented)
                 .labelStyle(.iconOnly)
+                .labelsHidden()
                 .padding(.horizontal, 8)
                 .frame(height: EditorChrome.headerHeight)
 
@@ -315,6 +355,13 @@ struct WorkspaceView: View {
         )
     }
 
+    private var trustPromptPresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.trustPromptNeeded ?? false },
+            set: { if !$0 { workspace?.trustPromptNeeded = false } }
+        )
+    }
+
     private var diffReviewPresented: Binding<Bool> {
         Binding(
             get: { workspace?.pendingDiff != nil },
@@ -343,7 +390,12 @@ struct WorkspaceView: View {
 
     /// Launches the configured agent in a new terminal, revealing the dock.
     private func openAgent() {
-        guard let workspace, let command = MCPService.launchCommand(settings: settings) else { return }
+        guard let workspace else { return }
+        launchAgent(in: workspace)
+    }
+
+    private func launchAgent(in workspace: Workspace) {
+        guard let command = MCPService.launchCommand(settings: settings) else { return }
         MCPService.bindAgent(to: workspace, settings: settings)
         workspace.runAgent(command: command, name: settings.agentName)
     }
@@ -351,9 +403,18 @@ struct WorkspaceView: View {
     /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
     private func runSelectedAction() {
         guard let workspace else { return }
-        let actions = workspace.projectConfig.runnableActions
-        let action = actions.first { $0.name == selectedActionName } ?? actions.first
-        if let action { workspace.runProjectAction(action) }
+        if let action = selectedAction(workspace) { workspace.runProjectAction(action) }
+    }
+
+    /// The action currently chosen in the toolbar picker (falling back to first).
+    private func selectedAction(_ workspace: Workspace) -> ProjectConfig.Action? {
+        let actions = workspace.availableActions
+        return actions.first { $0.name == selectedActionName } ?? actions.first
+    }
+
+    /// The command line of the selected action, for the Run button's tooltip.
+    private func selectedActionCommand(_ workspace: Workspace) -> String {
+        selectedAction(workspace)?.command ?? ""
     }
 
     private var projectSettingsPresented: Binding<Bool> {
@@ -517,13 +578,11 @@ private struct TerminalResizeHandle: View {
         .frame(width: vertical ? 6 : nil, height: vertical ? nil : 6)
         .frame(maxWidth: vertical ? nil : .infinity, maxHeight: vertical ? .infinity : nil)
         .contentShape(Rectangle())
-        .onHover { inside in
-            if inside {
-                (vertical ? NSCursor.resizeLeftRight : NSCursor.resizeUpDown).push()
-            } else {
-                NSCursor.pop()
-            }
-        }
+        // `pointerStyle` sets the resize cursor only while the pointer is over
+        // the handle and restores it automatically — unlike a manual
+        // NSCursor.push()/pop() in onHover, which leaks a pushed cursor if the
+        // handle is unmounted (⌃` hiding the terminal) while hovered.
+        .pointerStyle(vertical ? .columnResize : .rowResize)
         .gesture(
             DragGesture()
                 .onChanged { value in
@@ -534,5 +593,18 @@ private struct TerminalResizeHandle: View {
                 }
                 .onEnded { _ in dragStart = nil }
         )
+        // Expose the drag-only divider to assistive tech.
+        .accessibilityElement()
+        .accessibilityLabel("Resize Terminal")
+        .accessibilityValue(vertical ? "Width \(Int(size))" : "Height \(Int(size))")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAdjustableAction { direction in
+            let step: CGFloat = 24
+            switch direction {
+            case .increment: size = min(size + step, maxSize)
+            case .decrement: size = max(size - step, minSize)
+            @unknown default: break
+            }
+        }
     }
 }

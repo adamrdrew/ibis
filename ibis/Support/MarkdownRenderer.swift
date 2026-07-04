@@ -6,18 +6,31 @@ enum MarkdownRenderer {
     static func html(forMarkdown markdown: String) -> String {
         let markedJS = bundledMarkedJS()
         let mdLiteral = jsonStringLiteral(markdown)
+        // A per-render nonce + Content-Security-Policy: only our two inline
+        // scripts (carrying the nonce) may run, so a `<script>` or `onerror=`
+        // attribute rendered from the Markdown source can't execute, and no
+        // remote fetch/XHR is allowed. Rendered content is otherwise untrusted.
+        let nonce = randomNonce()
+        let csp = "default-src 'none'; "
+            + "style-src 'unsafe-inline'; "
+            + "img-src data: https: file:; "
+            + "media-src data: https: file:; "
+            + "font-src data: https: file:; "
+            + "connect-src 'none'; "
+            + "script-src 'nonce-\(nonce)';"
         return """
         <!doctype html>
         <html>
         <head>
         <meta charset="utf-8">
+        <meta http-equiv="Content-Security-Policy" content="\(csp)">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <style>\(css)</style>
         </head>
         <body>
         <article class="markdown-body" id="content"></article>
-        <script>\(markedJS)</script>
-        <script>
+        <script nonce="\(nonce)">\(markedJS)</script>
+        <script nonce="\(nonce)">
         try {
           const source = \(mdLiteral);
           marked.setOptions({ gfm: true, breaks: false });
@@ -29,6 +42,15 @@ enum MarkdownRenderer {
         </body>
         </html>
         """
+    }
+
+    /// A random nonce for the Content-Security-Policy script allowance.
+    private static func randomNonce() -> String {
+        let bytes = (0..<16).map { _ in UInt8.random(in: 0...255) }
+        return Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     private static func bundledMarkedJS() -> String {
@@ -46,8 +68,12 @@ enum MarkdownRenderer {
               let literal = String(data: data, encoding: .utf8) else {
             return "\"\""
         }
-        // Guard against premature </script> if the content contains it.
-        return literal.replacingOccurrences(of: "</", with: "<\\/")
+        // Guard against breaking out of the <script> block: neutralize a literal
+        // `</script>` (via `</`) and an HTML comment opener `<!--` that some
+        // parsers treat specially inside a script.
+        return literal
+            .replacingOccurrences(of: "</", with: "<\\/")
+            .replacingOccurrences(of: "<!", with: "<\\!")
     }
 
     private static let css = """

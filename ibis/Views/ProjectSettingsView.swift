@@ -12,6 +12,12 @@ struct ProjectSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if let loadError = config.loadError {
+                    Section {
+                        Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                    }
+                }
                 actionsSection
                 environmentSection
             }
@@ -29,6 +35,8 @@ struct ProjectSettingsView: View {
                         commit()
                         dismiss()
                     }
+                    // Can't save over a file we couldn't parse (see loadError).
+                    .disabled(config.loadError != nil)
                 }
             }
         }

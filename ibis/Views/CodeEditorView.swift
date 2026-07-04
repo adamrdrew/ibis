@@ -33,8 +33,10 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        // Build an explicit TextKit 1 stack.
-        let textStorage = NSTextStorage()
+        // Build an explicit TextKit 1 stack, attaching *this pane's* layout
+        // manager to the document's shared storage so multiple panes editing the
+        // same file share one buffer (see OpenDocument.storage).
+        let textStorage = document.storage
         let layoutManager = NSLayoutManager()
         textStorage.addLayoutManager(layoutManager)
         let textContainer = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
@@ -49,7 +51,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.onAppearanceChange = { [weak coordinator = context.coordinator] in
             coordinator?.scheduleHighlight(debounced: false)
         }
-        textView.isEditable = true
+        textView.isEditable = document.isEditable
         textView.isSelectable = true
         textView.allowsUndo = true
         textView.isRichText = false
@@ -91,10 +93,11 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.ruler = ruler
         context.coordinator.observeScrolling(in: scrollView)
 
-        textView.string = document.text
+        // The shared storage already holds the text; no need to assign a string.
         configure(textView, in: scrollView, ruler: ruler)
         syncCoordinator(context.coordinator)
         context.coordinator.language = Language.highlightName(for: document.url)
+        context.coordinator.lastContentVersion = document.contentVersion
         context.coordinator.hasScrolledToStart = false
         context.coordinator.suppressStartScroll = document.pendingSelection != nil
         context.coordinator.scheduleHighlight(debounced: false)
@@ -102,22 +105,37 @@ struct CodeEditorView: NSViewRepresentable {
         return scrollView
     }
 
+    /// Detaches this pane's layout manager from the shared storage when the pane
+    /// goes away, so closing/reopening panes doesn't accumulate layout managers
+    /// (and redundant highlight passes) on a long-lived document buffer.
+    static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.detachFromStorage()
+    }
+
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView,
               let ruler = context.coordinator.ruler else { return }
 
-        // Keep the text view in sync when the document text changes externally
-        // (e.g. after an async load), without clobbering in-progress typing.
         var needsHighlight = false
-        if textView.string != document.text {
-            textView.string = document.text
+        // The buffer is shared, so a *programmatic* replacement (load, revert,
+        // applied agent edit) is already reflected here; we only need to
+        // re-highlight, reset scroll, and drop stale undo actions (whose ranges
+        // now point past the new, possibly shorter, backing store — undoing them
+        // would throw an out-of-bounds exception).
+        if context.coordinator.lastContentVersion != document.contentVersion {
+            context.coordinator.lastContentVersion = document.contentVersion
             needsHighlight = true
             context.coordinator.hasScrolledToStart = false
             context.coordinator.suppressStartScroll = document.pendingSelection != nil
+            // Clear only *this document's* undo stack. Because the text view uses
+            // the document-scoped undo manager (see undoManager(for:)), this can't
+            // wipe another file's history shown in a sibling pane.
+            document.undoManager.removeAllActions()
         }
-        if context.coordinator.lastConfiguration != configuration {
-            needsHighlight = true
-        }
+
+        let configChanged = context.coordinator.lastConfiguration != configuration
+        if configChanged { needsHighlight = true }
+
         // The URL can change under a stable document (Save As of an untitled
         // buffer), which may change the language — refresh it.
         let language = Language.highlightName(for: document.url)
@@ -126,14 +144,21 @@ struct CodeEditorView: NSViewRepresentable {
             needsHighlight = true
         }
 
-        configure(textView, in: scrollView, ruler: ruler)
+        textView.isEditable = document.isEditable
+
+        // Only reconfigure on an actual configuration change: `configure` sets the
+        // font across the whole storage, which would wipe the highlighter's
+        // bold/italic runs on every unrelated update (e.g. the dirty-flag flip).
+        if configChanged || context.coordinator.lastConfiguration == nil {
+            configure(textView, in: scrollView, ruler: ruler)
+        }
         syncCoordinator(context.coordinator)
 
         if needsHighlight {
             context.coordinator.scheduleHighlight(debounced: false)
         }
 
-        applyPendingSelectionIfNeeded(textView)
+        applyPendingSelectionIfNeeded(context.coordinator)
         applyFocusRequestIfNeeded(textView, coordinator: context.coordinator)
     }
 
@@ -147,17 +172,23 @@ struct CodeEditorView: NSViewRepresentable {
     }
 
     /// If the document requested a selection (e.g. opened from search), select
-    /// and reveal it, then focus the editor.
-    private func applyPendingSelectionIfNeeded(_ textView: NSTextView) {
-        guard let pending = document.pendingSelection else { return }
-        document.pendingSelection = nil
+    /// and reveal it, then focus the editor. The observed `pendingSelection` flag
+    /// is cleared inside the async block (never synchronously during the update
+    /// pass) to avoid the "modifying state during view update" re-entrancy cycle.
+    private func applyPendingSelectionIfNeeded(_ coordinator: Coordinator) {
+        guard let textView = coordinator.textView,
+              let pending = document.pendingSelection,
+              !coordinator.pendingSelectionScheduled else { return }
+        coordinator.pendingSelectionScheduled = true
 
-        let length = (textView.string as NSString).length
-        let location = min(pending.location, length)
-        let clampedLength = min(pending.length, length - location)
-        let range = NSRange(location: location, length: clampedLength)
+        DispatchQueue.main.async { [weak document] in
+            coordinator.pendingSelectionScheduled = false
+            document?.pendingSelection = nil
 
-        DispatchQueue.main.async {
+            let length = (textView.string as NSString).length
+            let location = min(pending.location, length)
+            let clampedLength = min(pending.length, length - location)
+            let range = NSRange(location: location, length: clampedLength)
             textView.setSelectedRange(range)
             textView.scrollRangeToVisible(range)
             textView.window?.makeFirstResponder(textView)
@@ -264,10 +295,18 @@ struct CodeEditorView: NSViewRepresentable {
             }
         }
 
+        /// Give every pane of this document the same document-scoped undo manager
+        /// (coherent undo across a split) instead of the shared window one, so
+        /// clearing it on a programmatic replace can't wipe another file's history.
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            document.undoManager
+        }
+
         func textDidChange(_ notification: Notification) {
-            guard let textView else { return }
-            document.text = textView.string
-            document.isDirty = true
+            // The text lives in the shared storage the text view already edits in
+            // place, so there's nothing to copy back — just record the edit (dirty
+            // + edit generation for the in-flight-save guard) and re-highlight.
+            document.registerUserEdit()
             ruler?.updateThickness()
             ruler?.needsDisplay = true
             scheduleHighlight(debounced: true)
@@ -393,6 +432,12 @@ struct CodeEditorView: NSViewRepresentable {
         var darkThemeName = EditorTheme.dark
         var language: String?
         var lastConfiguration: EditorConfiguration?
+        /// The document content version last synced, so a shared-buffer edit from
+        /// another pane triggers a single re-highlight rather than a clobber.
+        var lastContentVersion = 0
+        /// True while a pending-selection application is queued, so repeated
+        /// `updateNSView` passes don't schedule it (or clear the flag) twice.
+        var pendingSelectionScheduled = false
         /// One-shot: after a document loads, scroll to the very start so the
         /// text isn't left offset a few characters to the right. Suppressed when
         /// the document opened with a target selection (e.g. from search).
@@ -409,6 +454,15 @@ struct CodeEditorView: NSViewRepresentable {
             guard !hasScrolledToStart, !suppressStartScroll, let textView else { return }
             hasScrolledToStart = true
             textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+        }
+
+        /// Removes this pane's layout manager from the document's shared storage.
+        func detachFromStorage() {
+            highlightTask?.cancel()
+            if let layoutManager = textView?.layoutManager,
+               let storage = layoutManager.textStorage {
+                storage.removeLayoutManager(layoutManager)
+            }
         }
 
         deinit {

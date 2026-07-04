@@ -48,13 +48,24 @@ private struct TabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: document.url.map { FileIconProvider.symbolName(forFileURL: $0) } ?? "doc")
-                .foregroundStyle(.secondary)
-                .font(.caption)
+            // The selectable region is a real Button so it's reachable by Full
+            // Keyboard Access and activatable by VoiceOver (a bare tap gesture is
+            // invisible to both). The close control stays a sibling button.
+            Button(action: onSelect) {
+                HStack(spacing: 6) {
+                    Image(systemName: document.url.map { FileIconProvider.symbolName(forFileURL: $0) } ?? "doc")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
 
-            Text(document.name)
-                .lineLimit(1)
-                .font(.callout)
+                    Text(document.name)
+                        .lineLimit(1)
+                        .font(.callout)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(document.name + (document.isDirty ? ", edited" : ""))
+            .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
 
             trailing
                 .frame(width: 14, height: 14)
@@ -69,13 +80,10 @@ private struct TabItemView: View {
                     .frame(height: 2)
             }
         }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onSelect)
         // Middle-click closes the tab (routed through the dirty-safe close path).
         .overlay { MiddleClickCatcher(onMiddleClick: onClose) }
         .onHover { isHovering = $0 }
         .help(document.url?.path(percentEncoded: false) ?? "Untitled")
-        .accessibilityLabel(document.name + (document.isDirty ? ", edited" : ""))
         .contextMenu {
             Button("Close Tab", action: onClose)
             Button("Close Other Tabs") {
