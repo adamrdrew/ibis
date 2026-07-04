@@ -216,7 +216,9 @@ private struct MCPSettingsView: View {
                             if settings.mcpEnabled { MCPService.restart(settings: settings) }
                         }
 
-                    Text("Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only.")
+                    Toggle("Inject Ibis system prompt (Claude Code)", isOn: $settings.agentInjectSystemPrompt)
+
+                    Text("Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only. The system prompt tells Claude Code it is running in Ibis and how to use its tools; it is appended at launch via --append-system-prompt.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {

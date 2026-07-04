@@ -220,7 +220,8 @@ enum MCPService {
     /// nil if no agent is configured.
     static func launchCommand(settings: AppSettings) -> String? {
         guard let base = settings.agentCommandLine else { return nil }
-        guard settings.mcpEnabled, settings.agentKind == .claude else { return base }
+        guard settings.mcpEnabled, settings.agentKind == .claude,
+              settings.agentInjectSystemPrompt else { return base }
         let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
         return base + " --append-system-prompt '" + prompt + "'"
     }

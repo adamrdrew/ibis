@@ -68,6 +68,10 @@ final class AppSettings {
     var agentArgs: String { didSet { defaults.set(agentArgs, forKey: Key.agentArgs) } }
     /// Which agent the user runs, so Ibis can write that agent's MCP config format.
     var agentKind: AgentKind { didSet { defaults.set(agentKind.rawValue, forKey: Key.agentKind) } }
+    /// Whether to inject Ibis's orientation into Claude Code's system prompt at
+    /// launch (via `--append-system-prompt`). On by default; only applies when
+    /// MCP is enabled and the agent is Claude Code.
+    var agentInjectSystemPrompt: Bool { didSet { defaults.set(agentInjectSystemPrompt, forKey: Key.agentInjectSystemPrompt) } }
 
     // MARK: MCP server
 
@@ -116,6 +120,7 @@ final class AppSettings {
         agentCommand = defaults.string(forKey: Key.agentCommand) ?? "claude"
         agentArgs = defaults.string(forKey: Key.agentArgs) ?? ""
         agentKind = defaults.string(forKey: Key.agentKind).flatMap(AgentKind.init) ?? .claude
+        agentInjectSystemPrompt = defaults.object(forKey: Key.agentInjectSystemPrompt) as? Bool ?? true
         mcpEnabled = defaults.bool(forKey: Key.mcpEnabled)
         // Default to an ephemeral port (0 = OS-assigned): a fixed, well-known port
         // lets another local process squat it and phish tokens. Configs are
@@ -162,6 +167,7 @@ final class AppSettings {
         static let agentCommand = "agent.command"
         static let agentArgs = "agent.args"
         static let agentKind = "agent.kind"
+        static let agentInjectSystemPrompt = "agent.injectSystemPrompt"
         static let mcpEnabled = "mcp.enabled"
         static let mcpPort = "mcp.port"
         static let mcpToken = "mcp.token"
