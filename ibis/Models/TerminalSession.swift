@@ -45,13 +45,6 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Called when the shell process exits (used by the action runner).
     @ObservationIgnored var onExit: (() -> Void)?
 
-    /// Count of processes we deliberately replaced (reusing the Run tab) whose
-    /// `processTerminated` callback is still in flight. Those stale terminations
-    /// must not clear `isRunning` / fire `onExit` for the *new* process — that's
-    /// the Stop-then-immediately-Run race, where the old process's delayed exit
-    /// would otherwise mark the just-started action as stopped.
-    @ObservationIgnored private var supersededProcesses = 0
-
     init(
         workingDirectory: URL,
         command: String? = nil,
@@ -76,11 +69,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         self.title = title
         self.extraEnvironment = extraEnvironment
         if let terminalView {
-            if isRunning {
-                // The outgoing process's exit callback is now stale.
-                supersededProcesses += 1
-                terminalView.terminate()
-            }
+            if isRunning { terminate() }
             startShell(shellOverride: lastShellOverride, on: terminalView)
         }
         // If the view isn't built yet, makeTerminalView starts `command` on build.
@@ -118,12 +107,18 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         startShell(shellOverride: shellOverride, on: terminalView)
     }
 
-    /// Terminates the shell process (on explicit close or workspace teardown).
-    /// `isRunning` is left for `processTerminated` to clear so a Stop immediately
-    /// followed by a Run can tell the outgoing process's exit apart from the new
-    /// one's (see `supersededProcesses`).
+    /// Terminates the shell process (Stop, explicit close, workspace teardown).
+    /// SwiftTerm's `terminate()` cancels its process-exit monitor, so
+    /// `processTerminated` never fires for a process killed this way — the exit
+    /// state must be settled here, synchronously. The `isRunning` guard also
+    /// keeps a second terminate from SIGTERM-ing a dead shell's PID, which the
+    /// kernel may have already recycled for an unrelated process.
     func terminate() {
+        guard isRunning else { return }
+        isRunning = false
+        exitCode = nil
         terminalView?.terminate()
+        onExit?()
     }
 
     private func startShell(shellOverride: String?, on view: LocalProcessTerminalView) {
@@ -157,12 +152,8 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
     func processTerminated(source: TerminalView, exitCode: Int32?) {
-        // A process we deliberately replaced (Run-tab reuse) exiting: swallow it
-        // so it doesn't mark the new process as stopped.
-        if supersededProcesses > 0 {
-            supersededProcesses -= 1
-            return
-        }
+        // Already settled by `terminate()` (or never started): nothing to do.
+        guard isRunning else { return }
         self.exitCode = exitCode
         isRunning = false
         onExit?()

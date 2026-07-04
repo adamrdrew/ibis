@@ -71,7 +71,12 @@ enum MCPConfigWriter {
         bearer_token_env_var = "IBIS_MCP_TOKEN"
         """
 
-        let existing = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        // Same rule as mergeJSON: an existing-but-unreadable file aborts rather
+        // than being replaced with only our table.
+        var existing = ""
+        if FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) {
+            existing = try String(contentsOf: file, encoding: .utf8)
+        }
         let merged = replacingTOMLTable(named: "mcp_servers.ibis", in: existing, with: block)
         try merged.write(to: file, atomically: true, encoding: .utf8)
 
@@ -83,10 +88,21 @@ enum MCPConfigWriter {
 
     // MARK: - JSON merge
 
+    struct MergeError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     private static func mergeJSON(at file: URL, serverKey: String, entry: [String: Any], container: String) throws {
         var root: [String: Any] = [:]
-        if let data = try? Data(contentsOf: file),
-           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+        // An existing file that can't be read or parsed must abort the merge —
+        // falling back to an empty root would atomically replace the user's
+        // whole config (every other MCP server they have) with just our entry.
+        if FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) {
+            let data = try Data(contentsOf: file)
+            guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw MergeError(message: "\(file.lastPathComponent) exists but isn’t a valid JSON object. Fix or remove it, then try again.")
+            }
             root = parsed
         }
         var servers = root[container] as? [String: Any] ?? [:]
@@ -98,6 +114,33 @@ enum MCPConfigWriter {
     }
 
     // MARK: - Hardening
+
+    /// Re-asserts the token-file hardening (0600 + gitignore) on configs written
+    /// by builds that predate it — `write` only hardens on the *next* write, so
+    /// an existing config can sit world-readable and un-gitignored indefinitely.
+    /// Only files that actually carry an Ibis bearer token are touched: a
+    /// hand-written `.mcp.json` with no secret may be deliberately committed,
+    /// and gitignoring it would silently break that.
+    static func hardenExistingConfigs(projectRoot root: URL) {
+        for relative in [".mcp.json", ".agents/mcp_config.json"] {
+            let file = root.appending(path: relative)
+            guard FileManager.default.fileExists(atPath: file.path(percentEncoded: false)),
+                  containsIbisToken(file) else { continue }
+            restrictPermissions(file)
+            ensureGitignored(relative, root: root)
+        }
+    }
+
+    /// Whether a JSON config carries an Ibis entry with an inline bearer token.
+    private static func containsIbisToken(_ file: URL) -> Bool {
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = root["mcpServers"] as? [String: Any],
+              let ibis = servers["ibis"] as? [String: Any],
+              let headers = ibis["headers"] as? [String: String]
+        else { return false }
+        return headers["Authorization"]?.hasPrefix("Bearer ") == true
+    }
 
     /// Restricts a written config file to owner read/write (0600) since it holds
     /// a bearer token.
@@ -112,7 +155,13 @@ enum MCPConfigWriter {
     /// token-bearing config file never gets committed. Idempotent, additive only.
     private static func ensureGitignored(_ entry: String, root: URL) {
         let gitignore = root.appending(path: ".gitignore")
-        var contents = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
+        var contents = ""
+        if FileManager.default.fileExists(atPath: gitignore.path(percentEncoded: false)) {
+            // Unreadable .gitignore: skip (best-effort) rather than overwrite it
+            // with just our entry.
+            guard let existing = try? String(contentsOf: gitignore, encoding: .utf8) else { return }
+            contents = existing
+        }
         let alreadyListed = contents
             .split(separator: "\n", omittingEmptySubsequences: false)
             .contains { $0.trimmingCharacters(in: .whitespaces) == entry }

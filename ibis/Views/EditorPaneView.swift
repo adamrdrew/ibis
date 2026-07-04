@@ -135,6 +135,11 @@ struct EditorPaneView: View {
                 VStack(spacing: 0) {
                     if let reason = document.readOnlyReason {
                         editorNotice(reason, systemImage: "lock.fill")
+                    } else if document.isFileMissing {
+                        editorNotice(
+                            "This file was moved or deleted on disk. Saving will recreate it here.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
                     } else if document.hasExternalChanges {
                         editorNotice(
                             "This file changed on disk. Saving will overwrite those changes.",

@@ -76,7 +76,7 @@ struct WorkspaceView: View {
         }
     }
 
-    private var splitView: some View {
+    private var navigationRoot: some View {
         NavigationSplitView {
             sidebar
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 520)
@@ -88,7 +88,13 @@ struct WorkspaceView: View {
         // NavigationSplitView, SwiftUI inserts its automatic sidebar-toggle item
         // twice ("already contains an item with identifier …toggleSidebar").
         // So this stays a plain, non-customizable ToolbarItemGroup.
-        .toolbar {
+        // (Toolbar content lives in its own builder property — inlining it made
+        // this whole expression exceed the type-checker's time limit.)
+        .toolbar { toolbarContent }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
             // Project action runner — shown only when actions are configured.
             // (The condition lives at the toolbar-content level, not inside a
             // ToolbarItemGroup, where SwiftUI handles `if` unreliably.)
@@ -180,7 +186,10 @@ struct WorkspaceView: View {
                 .disabled(workspace == nil || settings.agentCommandLine == nil)
                 .help("Run \(settings.agentName) in a terminal (⌃⇧A)")
             }
-        }
+    }
+
+    private var splitView: some View {
+        navigationRoot
         // ⌘W closes the active tab (a key-window control, so it takes precedence
         // over the built-in window Close). Disabled when no tab is open, so ⌘W
         // then falls through to closing the window.
@@ -229,6 +238,11 @@ struct WorkspaceView: View {
             if let workspace {
                 workspace.resolvePendingDiff(apply: false)
                 MCPBridge.shared.unregister(workspace)
+                // Kill this window's shells/agents/actions. Nothing else does:
+                // SwiftTerm's pending PTY read keeps each process object alive
+                // past dealloc, so without this a closed window leaks a live
+                // shell (or a still-running agent) until app quit.
+                workspace.terminal.terminateAll()
             }
         }
         // Agent-proposed edit review (MCP propose_edit); dismiss = discard.
@@ -261,9 +275,10 @@ struct WorkspaceView: View {
         }
         .task(id: selection) {
             guard let selection, let workspace else { return }
-            let document = workspace.document(for: selection)
-            await document.loadIfNeeded()
-            workspace.layout.activePane?.open(document)
+            // Route through openDocument so overlapping opens (this task and an
+            // outline click, or two quick clicks) are ordered by its ticket and
+            // a slow load can't override a newer click's selection.
+            workspace.openDocument(at: selection)
         }
         // An "Open in Agent" request for a folder whose window is *already* open
         // is delivered here (the new-window `.task` above wouldn't re-run). This

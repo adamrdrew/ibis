@@ -129,9 +129,18 @@ final class MCPServerController {
         Task {
             do {
                 try await transport.start()
+                // stop() (or a port-change restart) may have detached this
+                // transport while it was still binding. It owns the state now;
+                // shut the orphaned listener down instead of adopting it —
+                // otherwise the UI says "off" while the port stays taken.
+                guard self.transport === transport else {
+                    try? await transport.stop()
+                    return
+                }
                 self.activePort = transport.port
                 self.isRunning = true
             } catch {
+                guard self.transport === transport else { return }
                 self.transport = nil
                 self.isRunning = false
                 self.startError = "Couldn’t start on port \(preferredPort): \(error.localizedDescription)"
@@ -222,15 +231,22 @@ enum MCPService {
     static func bindAgent(to workspace: Workspace, settings: AppSettings) {
         guard settings.mcpEnabled, let port = runningPort else { return }
         let token = MCPBridge.shared.token(for: workspace)
-        _ = try? MCPConfigWriter.write(
-            agent: settings.agentKind,
-            // Use the project directory, not rootURL: for a single-file workspace
-            // rootURL is the *file*, so writing "<file>/.mcp.json" would fail and
-            // leave the agent unbound. projectRoot is where the agent's cwd is.
-            projectRoot: workspace.projectRoot,
-            port: port,
-            token: token
-        )
+        do {
+            _ = try MCPConfigWriter.write(
+                agent: settings.agentKind,
+                // Use the project directory, not rootURL: for a single-file workspace
+                // rootURL is the *file*, so writing "<file>/.mcp.json" would fail and
+                // leave the agent unbound. projectRoot is where the agent's cwd is.
+                projectRoot: workspace.projectRoot,
+                port: port,
+                token: token
+            )
+        } catch {
+            // The merge deliberately aborts on an unparseable existing config;
+            // swallowing that here would launch the agent with no Ibis tools
+            // and no explanation anywhere.
+            workspace.presentError("The agent is starting without Ibis tools — its MCP config couldn’t be written. \(error.localizedDescription)")
+        }
     }
 
     /// The bound port if the server is running, else nil.

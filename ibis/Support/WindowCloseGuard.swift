@@ -32,7 +32,9 @@ struct WindowCloseGuard: NSViewRepresentable {
         var shouldClose: (_ proceed: @escaping () -> Void) -> Bool
         private weak var next: NSWindowDelegate?
         /// Set once an async decision has approved the close, so the re-issued
-        /// close passes straight through.
+        /// close passes straight through. Consumed by that one close attempt —
+        /// left latched, it would silently skip the unsaved-changes prompt on
+        /// every later ⌘W if the approved close was vetoed downstream.
         private var closeApproved = false
 
         init(shouldClose: @escaping (_ proceed: @escaping () -> Void) -> Bool) {
@@ -48,7 +50,10 @@ struct WindowCloseGuard: NSViewRepresentable {
         }
 
         func windowShouldClose(_ sender: NSWindow) -> Bool {
-            if closeApproved { return forwardShouldClose(sender) }
+            if closeApproved {
+                closeApproved = false
+                return forwardShouldClose(sender)
+            }
             let allow = shouldClose { [weak self, weak sender] in
                 guard let self, let sender else { return }
                 self.closeApproved = true

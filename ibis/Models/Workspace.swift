@@ -59,10 +59,19 @@ final class Workspace {
     var onDirectoryReloaded: ((FileNode) -> Void)?
 
     /// Asks the file browser to expand to and select a URL (MCP `reveal_in_tree`).
+    /// nil while the browser isn't mounted (Search sidebar showing).
     var onRevealInTree: ((URL) -> Void)?
 
+    /// A reveal that arrived while the file browser wasn't mounted; the browser
+    /// consumes it when it (re)connects, so the request isn't silently dropped.
+    var pendingReveal: URL?
+
     func requestRevealInTree(_ url: URL) {
-        onRevealInTree?(url)
+        if let onRevealInTree {
+            onRevealInTree(url)
+        } else {
+            pendingReveal = url
+        }
     }
 
     /// An agent-proposed edit awaiting the human's review (MCP `propose_edit`).
@@ -97,23 +106,61 @@ final class Workspace {
     }
 
     /// Applies approved content to the file: into the open buffer (so the editor
-    /// shows it and undo works), then saved to disk. Returns whether the save
-    /// actually succeeded, so the caller doesn't report success on a read-only or
-    /// unwritable file. A non-editable document is left untouched.
-    @discardableResult
-    func applyProposedEdit(url: URL, content: String) async -> Bool {
+    /// shows it and undo works), then saved to disk. `expectedCurrent` is the
+    /// content the approved diff was computed against; if the document no longer
+    /// matches it, nothing is applied. A non-editable document is left untouched.
+    enum ApplyEditOutcome {
+        case applied
+        /// The buffer no longer matches the content the approved diff was
+        /// computed against (the user typed, a reload landed, another agent
+        /// wrote it) — applying would clobber changes the human never reviewed.
+        case staleContent
+        case notWritable
+        /// The buffer took the approved content but the write to disk failed
+        /// (file went read-only, volume full). The editor shows the change as
+        /// unsaved; disk is untouched — distinct from `notWritable`, where
+        /// nothing changed anywhere.
+        case saveFailed
+    }
+
+    func applyProposedEdit(url: URL, content: String, replacing expectedCurrent: String) async -> ApplyEditOutcome {
         let document = document(for: url)
         await document.loadIfNeeded()
-        guard document.isEditable else { return false }
+        guard document.isEditable else { return .notWritable }
+        guard document.text == expectedCurrent else { return .staleContent }
         document.text = content
         document.isDirty = true
         layout.activePane?.open(document)
-        return await document.save()
+        return await document.save() ? .applied : .saveFailed
     }
 
     /// The already-open document for a URL, if any (without creating one).
     func openedDocument(for url: URL) -> OpenDocument? {
-        documentCache[url]
+        documentCache[cacheKey(url)]
+    }
+
+    /// The canonical cache key for a URL: symlinks resolved, path standardized.
+    /// One on-disk file must map to one buffer no matter how its path is spelled
+    /// (`/tmp` vs `/private/tmp`, a symlinked root, an agent-supplied realpath) —
+    /// two divergent buffers for the same file would silently clobber each other,
+    /// whichever saved last.
+    private func cacheKey(_ url: URL) -> URL {
+        let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        // `resolvingSymlinksInPath` only canonicalizes components that exist on
+        // disk, so when the leaf is gone (a rename/move in flight) a symlinked
+        // *parent* stays unresolved and two spellings of the same location no
+        // longer collapse — e.g. `relocateOpenDocuments` would miss re-pointing a
+        // moved buffer under a symlinked root, and a later ⌘S would recreate the
+        // file at its old path. Resolve the surviving parent and re-append the
+        // leaf name so the key is stable regardless of whether the leaf exists.
+        if FileManager.default.fileExists(atPath: resolved.path(percentEncoded: false)) {
+            return resolved
+        }
+        let standardized = url.standardizedFileURL
+        return standardized.deletingLastPathComponent()
+            .resolvingSymlinksInPath()
+            .appendingPathComponent(standardized.lastPathComponent)
+            .standardizedFileURL
     }
 
     /// The hosting window, so unsaved-changes confirmations can attach as sheets.
@@ -166,6 +213,14 @@ final class Workspace {
 
         git.refresh()
 
+        // MCP configs written by builds that predate the token-file hardening
+        // may still be world-readable and un-gitignored; re-assert both for
+        // this project (no-op unless a token-bearing Ibis entry exists).
+        let hardenRoot = terminalRoot
+        Task.detached(priority: .utility) {
+            MCPConfigWriter.hardenExistingConfigs(projectRoot: hardenRoot)
+        }
+
         Self.registry.removeAll { $0.value == nil }
         Self.registry.append(WeakWorkspaceBox(self))
 
@@ -209,9 +264,15 @@ final class Workspace {
     /// Finds an already-loaded directory node whose URL matches, walking only
     /// loaded branches (unexpanded subtrees refresh themselves when opened).
     private func loadedDirectoryNode(matching directory: URL) -> FileNode? {
-        let target = directory.standardizedFileURL.path
+        // Compare canonical (symlink-resolved) paths, for the same reason as
+        // `cacheKey`: FSEvents delivers realpath'd paths, while node URLs keep
+        // the spelling the workspace was opened with. With a symlinked root
+        // (`ibis ~/proj` → /Volumes/Code/proj) no event would ever match a node
+        // and the tree would never live-refresh.
+        let target = directory.resolvingSymlinksInPath().standardizedFileURL.path
         func search(_ node: FileNode) -> FileNode? {
-            if node.isDirectory, node.isLoaded, node.url.standardizedFileURL.path == target {
+            if node.isDirectory, node.isLoaded,
+               node.url.resolvingSymlinksInPath().standardizedFileURL.path == target {
                 return node
             }
             for child in node.children ?? [] where child.isDirectory {
@@ -236,11 +297,12 @@ final class Workspace {
     /// Returns the cached document for a URL, creating (but not yet loading) one
     /// on first request.
     func document(for url: URL) -> OpenDocument {
-        if let existing = documentCache[url] {
+        let key = cacheKey(url)
+        if let existing = documentCache[key] {
             return existing
         }
         let document = OpenDocument(url: url)
-        documentCache[url] = document
+        documentCache[key] = document
         return document
     }
 
@@ -296,12 +358,20 @@ final class Workspace {
               let state = WorkspaceStateStore.load(for: rootURL),
               layout.panes.count == 1, layout.panes[0].tabDocuments.isEmpty else { return }
 
+        // Check tab existence off the main actor: with many persisted tabs on a
+        // slow/network volume, per-tab synchronous stats would block the UI at
+        // window open.
+        let allPaths = state.paneFilePaths.flatMap(\.self)
+        let existingPaths = await Task.detached(priority: .userInitiated) {
+            Set(allPaths.filter { FileManager.default.fileExists(atPath: URL(filePath: $0).path) })
+        }.value
+
         var panes: [EditorPane] = []
         for (paneIndex, paths) in state.paneFilePaths.enumerated() {
             let pane = paneIndex == 0 ? layout.panes[0] : EditorPane()
             for path in paths {
+                guard existingPaths.contains(path) else { continue }
                 let url = URL(filePath: path)
-                guard FileManager.default.fileExists(atPath: url.path) else { continue }
                 let document = document(for: url)
                 await document.loadIfNeeded()
                 pane.open(document)
@@ -359,11 +429,21 @@ final class Workspace {
     /// already selected (e.g. after its tab was closed).
     func openDocument(at url: URL) {
         let document = document(for: url)
+        openTicket += 1
+        let ticket = openTicket
         Task {
             await document.loadIfNeeded()
+            // A newer open superseded this one while the file was still being
+            // read (click large A, then small B: B lands first) — don't steal
+            // the tab selection back to the stale click.
+            guard ticket == openTicket else { return }
             layout.activePane?.open(document)
         }
     }
+
+    /// Orders overlapping `openDocument` requests so a slow load can't finish
+    /// last and override a newer click's selection.
+    @ObservationIgnored private var openTicket = 0
 
     /// Opens a new, empty, untitled document as a tab in the active pane.
     func newUntitledDocument() {
@@ -374,7 +454,7 @@ final class Workspace {
     func saveActiveDocument() async {
         guard let document = activeDocument else { return }
         if document.isUntitled {
-            saveAs(document) // presents its own error on failure
+            await saveAs(document) // presents its own error on failure
         } else {
             let saved = await document.save()
             if !saved {
@@ -388,7 +468,7 @@ final class Workspace {
     /// backed by a file. Caches it and re-highlights via the URL change.
     /// Returns whether it was saved.
     @discardableResult
-    func saveAs(_ document: OpenDocument) -> Bool {
+    func saveAs(_ document: OpenDocument) async -> Bool {
         // The in-memory text of a read-only (non-UTF-8) or binary document does
         // not faithfully represent the file — it's a lossy U+FFFD decode, or empty
         // for a binary. Writing it out would corrupt/blank the destination, and
@@ -405,23 +485,38 @@ final class Workspace {
             ?? (isDirectory ? rootURL : rootURL.deletingLastPathComponent())
         guard panel.runModal() == .OK, let url = panel.url else { return false }
 
-        do {
-            try document.text.write(to: url.resolvingSymlinksInPath(), atomically: true, encoding: .utf8)
-        } catch {
-            presentError("Couldn’t save “\(url.lastPathComponent)”: \(error.localizedDescription)")
+        // Write off the main actor — a large buffer to a slow/network volume
+        // would otherwise beachball the UI. Capture the edit generation so a
+        // keystroke landing during the write isn't silently marked clean below.
+        let contents = document.text
+        let generation = document.editGeneration
+        let writeURL = url.resolvingSymlinksInPath()
+        let writeError: String? = await Task.detached(priority: .userInitiated) {
+            do {
+                try contents.write(to: writeURL, atomically: true, encoding: .utf8)
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        }.value
+        if let writeError {
+            presentError("Couldn’t save “\(url.lastPathComponent)”: \(writeError)")
             return false
         }
         // If a *different* document already backed this URL, retire it: point its
         // open tabs at this now-authoritative document so one file isn't split
         // across two divergent buffers (whichever saved last would clobber the
         // other). Its stale cache key is dropped by rekeyDocumentCache below.
-        if let displaced = documentCache[url], displaced !== document {
+        if let displaced = documentCache[cacheKey(url)], displaced !== document {
             for pane in layout.panes { pane.replace(displaced, with: document) }
         }
         // Adopt the file and record its on-disk metadata so our own write isn't
         // later flagged as an external change.
         document.adoptSavedFile(at: url)
-        documentCache[url] = document
+        // Edits that arrived while the write was in flight aren't on disk —
+        // keep them marked unsaved rather than letting adoption clear them.
+        if document.editGeneration != generation { document.isDirty = true }
+        documentCache[cacheKey(url)] = document
         // Drop any stale key the document was previously cached under, so its old
         // URL doesn't keep returning this now-retargeted document.
         rekeyDocumentCache()
@@ -432,7 +527,7 @@ final class Workspace {
 
     func saveActiveDocumentAs() {
         guard let document = activeDocument else { return }
-        saveAs(document)
+        Task { await saveAs(document) }
     }
 
     func closeActiveTab() {
@@ -475,11 +570,13 @@ final class Workspace {
             switch response {
             case .alertFirstButtonReturn: // Save
                 if document.isUntitled {
-                    if self.saveAs(document) {
-                        self.closeTab(document, in: pane)
-                        completion(true)
-                    } else {
-                        completion(false)
+                    Task {
+                        if await self.saveAs(document) {
+                            self.closeTab(document, in: pane)
+                            completion(true)
+                        } else {
+                            completion(false)
+                        }
                     }
                 } else {
                     Task {
@@ -563,7 +660,7 @@ final class Workspace {
     /// later reopen reads fresh from disk. Untitled buffers just vanish.
     private func discardDocument(_ document: OpenDocument) {
         if let url = document.url {
-            documentCache.removeValue(forKey: url)
+            documentCache.removeValue(forKey: cacheKey(url))
         }
     }
 
@@ -574,11 +671,15 @@ final class Workspace {
     /// and re-key the cache. Without this, a later ⌘S would recreate the file at
     /// its old path and the edits would be lost. Copies (not moves) are ignored.
     func relocateOpenDocuments(from oldURL: URL, to newURL: URL) {
-        let oldPath = oldURL.standardizedFileURL.path
-        let newPath = newURL.standardizedFileURL.path
+        // Compare canonical paths so a document opened under a different spelling
+        // of the same location (symlinked root, agent-supplied realpath) still
+        // gets re-pointed. `oldURL` no longer exists on disk, but its surviving
+        // parent directories still resolve.
+        let oldPath = cacheKey(oldURL).path
+        let newPath = cacheKey(newURL).path
         var changed = false
         for document in documentCache.values {
-            guard let docPath = document.url?.standardizedFileURL.path else { continue }
+            guard let docPath = document.url.map({ cacheKey($0).path }) else { continue }
             if docPath == oldPath {
                 document.assignURL(newURL.standardizedFileURL)
                 changed = true
@@ -596,7 +697,7 @@ final class Workspace {
     private func rekeyDocumentCache() {
         var rebuilt: [URL: OpenDocument] = [:]
         for document in documentCache.values {
-            if let url = document.url { rebuilt[url] = document }
+            if let url = document.url { rebuilt[cacheKey(url)] = document }
         }
         documentCache = rebuilt
     }
@@ -849,7 +950,7 @@ final class Workspace {
         var allSucceeded = true
         for document in dirty {
             if document.isUntitled {
-                if !saveAs(document) { allSucceeded = false }
+                if !(await saveAs(document)) { allSucceeded = false }
             } else {
                 let saved = await document.save()
                 if !saved { allSucceeded = false }

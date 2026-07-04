@@ -17,7 +17,7 @@ enum FileTreeLoader {
         let fileManager = FileManager.default
         guard let urls = try? fileManager.contentsOfDirectory(
             at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
             options: [.skipsSubdirectoryDescendants]
         ) else {
             return []
@@ -25,7 +25,18 @@ enum FileTreeLoader {
 
         let entries = urls.compactMap { url -> FileEntry? in
             guard !ignoredNames.contains(url.lastPathComponent) else { return nil }
-            let isDirectory = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            var isDirectory = values?.isDirectory ?? false
+            if !isDirectory, values?.isSymbolicLink == true {
+                // `isDirectoryKey` doesn't follow symlinks, so a linked folder
+                // (a monorepo package, a linked node_modules) would render as a
+                // plain file — unexpandable, and opening it as a document fails.
+                // Classify by the link's destination instead.
+                var resolvedIsDirectory: ObjCBool = false
+                if fileManager.fileExists(atPath: url.path(percentEncoded: false), isDirectory: &resolvedIsDirectory) {
+                    isDirectory = resolvedIsDirectory.boolValue
+                }
+            }
             return FileEntry(url: url, isDirectory: isDirectory)
         }
 

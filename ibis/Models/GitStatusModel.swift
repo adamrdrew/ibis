@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 /// Live Git status for a workspace root, shown in the status bar. Reads state by
 /// shelling out to `git` (the app is unsandboxed) and is refreshed whenever the
@@ -71,7 +72,10 @@ final class GitStatusModel {
         } catch {
             return Info()
         }
-        var timedOut = false
+        // Written by the watchdog on a background queue and read after
+        // `waitUntilExit` — needs a real synchronization boundary, not a plain
+        // captured var (that read/write race is undefined behavior).
+        let timedOut = OSAllocatedUnfairLock(initialState: false)
 
         // Drain both pipes concurrently: if git writes a lot to stderr (many
         // `warning:` lines) while we only read stdout, it can block on a full
@@ -91,7 +95,14 @@ final class GitStatusModel {
 
         // Bound a git that hangs (e.g. blocked on an index lock) so slow/stuck
         // invocations during an FSEvents storm can't pile up indefinitely.
-        let watchdog = DispatchWorkItem { timedOut = true; process.terminate() }
+        let watchdog = DispatchWorkItem {
+            // `cancel()` below can't stop an already-running work item, so don't
+            // signal a process that has since exited (and possibly had its pid
+            // recycled by the kernel).
+            guard process.isRunning else { return }
+            timedOut.withLock { $0 = true }
+            process.terminate()
+        }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 10, execute: watchdog)
 
         process.waitUntilExit()
@@ -100,7 +111,7 @@ final class GitStatusModel {
 
         // Killed by the watchdog (or any signal): status indeterminate, don't
         // report it as "not a repository".
-        if timedOut || process.terminationReason == .uncaughtSignal { return nil }
+        if timedOut.withLock({ $0 }) || process.terminationReason == .uncaughtSignal { return nil }
         guard process.terminationStatus == 0 else { return Info() }
         return parse(String(data: outData, encoding: .utf8) ?? "")
     }

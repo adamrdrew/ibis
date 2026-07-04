@@ -67,6 +67,10 @@ struct FileOutlineView: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {}
 
+    static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
+        coordinator.teardown()
+    }
+
     // MARK: - Coordinator
 
     @MainActor
@@ -101,6 +105,32 @@ struct FileOutlineView: NSViewRepresentable {
             }
             workspace.onRevealInTree = { [weak self] url in
                 self?.revealInTree(url)
+            }
+            // Honor a reveal that arrived while the browser was unmounted
+            // (Search sidebar showing) — it was buffered, not dropped.
+            if let pending = workspace.pendingReveal {
+                workspace.pendingReveal = nil
+                revealInTree(pending)
+            }
+        }
+
+        /// Detaches everything that points back at this coordinator before the
+        /// view unmounts (sidebar switched to Search, window closing).
+        func teardown() {
+            // Reveal/reload requests buffer in the workspace (replayed on
+            // remount) instead of invoking a deallocated coordinator.
+            workspace.onDirectoryReloaded = nil
+            workspace.onRevealInTree = nil
+            // The Quick Look panel's dataSource/delegate are unretained; if it
+            // still points here and floats past this view's dealloc, its next
+            // query is a use-after-free. `endPreviewPanelControl` only runs if
+            // AppKit transfers control first, so clear explicitly.
+            if QLPreviewPanel.sharedPreviewPanelExists(),
+               let panel = QLPreviewPanel.shared(),
+               panel.dataSource === self {
+                panel.dataSource = nil
+                panel.delegate = nil
+                panel.orderOut(nil)
             }
         }
 
@@ -258,8 +288,12 @@ struct FileOutlineView: NSViewRepresentable {
             guard newName != node.name else { return }
             let oldURL = node.url
             let parent = oldURL.deletingLastPathComponent()
-            guard let newURL = try? FileOperations.rename(oldURL, to: newName) else {
-                field.stringValue = node.name // revert on failure
+            let newURL: URL
+            do {
+                newURL = try FileOperations.rename(oldURL, to: newName)
+            } catch {
+                field.stringValue = node.name // revert, and say why
+                workspace.presentError("Couldn’t rename “\(node.name)”: \(error.localizedDescription)")
                 return
             }
             renameInFlight = true
@@ -369,6 +403,7 @@ struct FileOutlineView: NSViewRepresentable {
                     workspace.relocateOpenDocuments(from: source, to: destination)
                     affected.insert(source.deletingLastPathComponent())
                 } else {
+                    guard !isCopyIntoItself(source: source, into: targetDirectory) else { continue }
                     let destination = FileOperations.uniqueURL(in: targetDirectory, baseName: source.lastPathComponent)
                     try? FileManager.default.copyItem(at: source, to: destination)
                 }
@@ -382,16 +417,23 @@ struct FileOutlineView: NSViewRepresentable {
             return true
         }
 
+        /// Whether the target directory is the source itself or a descendant of
+        /// it. Copying a folder into its own subtree makes `copyItem` recurse
+        /// into the growing destination, nesting copies until PATH_MAX.
+        private func isCopyIntoItself(source: URL, into targetDirectory: URL) -> Bool {
+            let sourcePath = source.standardizedFileURL.path
+            let targetPath = targetDirectory.standardizedFileURL.path
+            return targetPath == sourcePath || targetPath.hasPrefix(sourcePath + "/")
+        }
+
         /// Whether moving `source` into `targetDirectory` should be skipped: it's
         /// already there (a no-op), or the target is the source itself or a
         /// descendant of it (which would try to move a folder inside itself).
         private func isMoveNoOpOrInvalid(source: URL, into targetDirectory: URL) -> Bool {
-            let sourcePath = source.standardizedFileURL.path
             let targetPath = targetDirectory.standardizedFileURL.path
             let parentPath = source.deletingLastPathComponent().standardizedFileURL.path
             if parentPath == targetPath { return true }
-            if targetPath == sourcePath || targetPath.hasPrefix(sourcePath + "/") { return true }
-            return false
+            return isCopyIntoItself(source: source, into: targetDirectory)
         }
 
         // MARK: Context menu
@@ -564,6 +606,7 @@ struct FileOutlineView: NSViewRepresentable {
                     workspace.relocateOpenDocuments(from: source, to: target)
                     affected.insert(source.deletingLastPathComponent())
                 } else {
+                    guard !isCopyIntoItself(source: source, into: destination) else { continue }
                     let target = FileOperations.uniqueURL(in: destination, baseName: source.lastPathComponent)
                     try? FileManager.default.copyItem(at: source, to: target)
                 }

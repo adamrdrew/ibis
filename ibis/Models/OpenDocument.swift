@@ -67,6 +67,12 @@ final class OpenDocument: Identifiable {
     /// buffer has unsaved edits — so the UI can warn before a clobbering save.
     var hasExternalChanges = false
 
+    /// True when the file vanished from disk after we loaded/saved it (deleted,
+    /// or moved away — e.g. dragged into Finder as a move, `mv`/`rm` in the
+    /// terminal). The buffer is kept; the UI warns that saving will recreate
+    /// the file at this path, which would silently fork a moved file.
+    var isFileMissing = false
+
     /// A range the editor should select and scroll to next time it updates
     /// (used when opening a file from search results). Cleared once applied.
     var pendingSelection: NSRange?
@@ -201,6 +207,7 @@ final class OpenDocument: Identifiable {
             loadError = message
         }
         hasExternalChanges = false
+        isFileMissing = false
     }
 
     /// Adopts a file the buffer was just written to (Save As): retargets the
@@ -211,16 +218,39 @@ final class OpenDocument: Identifiable {
         assignURL(url)
         isDirty = false
         hasExternalChanges = false
+        isFileMissing = false
         let values = try? url.resolvingSymlinksInPath()
             .resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
         fileModificationDate = values?.contentModificationDate
         fileSize = values?.fileSize
     }
 
+    /// The in-flight save, if any. Saves chain on it so two overlapping saves
+    /// can't write out of order (the older content landing on disk last while
+    /// the buffer is already marked clean).
+    @ObservationIgnored private var pendingSave: Task<Bool, Never>?
+    @ObservationIgnored private var saveTicket = 0
+
     /// Saves to disk. Returns `false` for an untitled document (no URL yet) —
     /// the caller must route to Save As — or if the write fails.
     @discardableResult
     func save() async -> Bool {
+        let previous = pendingSave
+        saveTicket += 1
+        let ticket = saveTicket
+        let task = Task { [weak self] in
+            _ = await previous?.value
+            return await self?.performSave() ?? false
+        }
+        pendingSave = task
+        let result = await task.value
+        // Only the newest save clears the chain; an older one finishing late
+        // must not drop a still-pending successor.
+        if saveTicket == ticket { pendingSave = nil }
+        return result
+    }
+
+    private func performSave() async -> Bool {
         guard isEditable, let fileURL = url else { return false }
         // Write to the symlink target, not the link itself, so an atomic replace
         // updates the real file (and keeps the link intact).
@@ -241,6 +271,7 @@ final class OpenDocument: Identifiable {
             fileModificationDate = modified
             fileSize = size
             hasExternalChanges = false
+            isFileMissing = false
             // Only clear the dirty flag if no newer edits arrived while the write
             // was in flight; otherwise those edits would be lost silently.
             if editGeneration == generation { isDirty = false }
@@ -277,11 +308,22 @@ final class OpenDocument: Identifiable {
     /// UI can warn the user before they clobber the external change.
     func reconcileWithDisk() async {
         guard let fileURL = url, isLoaded, !isBinary, loadError == nil else { return }
+        // Stat the symlink *target*, matching what `performSave`/`adoptSavedFile`
+        // record — statting the link's own inode would never see target changes
+        // (silent clobber) and would mismatch after every save (spurious reload).
+        let statURL = fileURL.resolvingSymlinksInPath()
         let current = await Task.detached(priority: .utility) { () -> (Date?, Int?)? in
-            guard let values = try? fileURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
+            guard let values = try? statURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else { return nil }
             return (values.contentModificationDate, values.fileSize)
         }.value
-        guard let current else { return }
+        guard let current else {
+            // The stat failed — if the file is actually gone (moved or deleted
+            // outside Ibis), keep the buffer but warn: a save would recreate the
+            // file here, silently forking a moved file.
+            isFileMissing = !FileManager.default.fileExists(atPath: fileURL.path)
+            return
+        }
+        isFileMissing = false
         let unchanged = current.0 == fileModificationDate && current.1 == fileSize
         guard !unchanged else { return }
         if isDirty {
@@ -308,7 +350,11 @@ final class OpenDocument: Identifiable {
     nonisolated private static func read(_ url: URL) -> ReadOutcome {
         do {
             let data = try Data(contentsOf: url)
-            let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+            // Stat the symlink target — `Data(contentsOf:)` read it, and the save
+            // path records the target's metadata; statting the link would make
+            // every later comparison a false mismatch (or a missed real change).
+            let values = try? url.resolvingSymlinksInPath()
+                .resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
             let modified = values?.contentModificationDate
             let size = values?.fileSize
             if isProbablyBinary(data) {

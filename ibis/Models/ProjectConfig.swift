@@ -105,12 +105,20 @@ final class ProjectConfig {
     // MARK: - Persistence
 
     func load() {
-        guard let data = try? Data(contentsOf: fileURL) else {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch CocoaError.fileReadNoSuchFile {
             // File absent → an empty config is the correct state.
             actions = []
             envVars = []
             rawObject = [:]
             loadError = nil
+            return
+        } catch {
+            // Present but unreadable (permissions, I/O): treating it as absent
+            // would let a later Save replace the real file with an empty config.
+            loadError = "The .ibis.json file couldn’t be read (\(error.localizedDescription)). Fix it before saving from here."
             return
         }
         guard let file = try? JSONDecoder().decode(ConfigFile.self, from: data) else {
@@ -166,7 +174,13 @@ final class ProjectConfig {
     private func ensureGitignored() {
         let gitignore = root.appending(path: ".gitignore")
         let entry = ".ibis.json"
-        var contents = (try? String(contentsOf: gitignore, encoding: .utf8)) ?? ""
+        var contents = ""
+        if FileManager.default.fileExists(atPath: gitignore.path(percentEncoded: false)) {
+            // Unreadable .gitignore: skip (best-effort) rather than overwrite it
+            // with just our entry.
+            guard let existing = try? String(contentsOf: gitignore, encoding: .utf8) else { return }
+            contents = existing
+        }
         let alreadyListed = contents
             .split(separator: "\n", omittingEmptySubsequences: false)
             .contains { $0.trimmingCharacters(in: .whitespaces) == entry }

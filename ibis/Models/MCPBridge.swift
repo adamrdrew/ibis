@@ -118,14 +118,32 @@ final class MCPBridge {
         return try await reviewAndApply(in: workspace, url: url, before: currentContent(of: url, in: workspace), after: newContent)
     }
 
+    /// The text the diff should be computed against: the open buffer if the file
+    /// is open (its unsaved edits are the current truth), else the file on disk.
+    /// The disk read runs off the main actor — an agent can point this at any
+    /// in-workspace file, including one big enough for a synchronous read to
+    /// beachball the editor.
+    private func currentContent(of url: URL, in workspace: Workspace) async -> String {
+        if let open = workspace.openedDocument(for: url) { return open.text }
+        return await Task.detached(priority: .userInitiated) {
+            (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        }.value
+    }
+
     /// Applies a set of `old → new` string edits to the current file content and
     /// runs the same diff review. Small, surgical edits stay cheap and still go
     /// through the approval gate. Errors are actionable so a mismatch is
     /// re-proposed through the gate rather than routed around it.
     func proposePatch(token: String?, path: String, edits: [ProposedEdit]) async throws -> String {
         let (workspace, url) = try target(token: token, path: path)
-        let before = currentContent(of: url, in: workspace)
-        let after = try applyEdits(edits, to: before, fileName: url.lastPathComponent)
+        let before = await currentContent(of: url, in: workspace)
+        // The old→new scans are O(edits × size); run them off the main actor so
+        // a patch against a huge file can't hang the editor before the diff is
+        // even computed.
+        let fileName = url.lastPathComponent
+        let after = try await Task.detached(priority: .userInitiated) {
+            try Self.applyEdits(edits, to: before, fileName: fileName)
+        }.value
         return try await reviewAndApply(in: workspace, url: url, before: before, after: after)
     }
 
@@ -136,13 +154,7 @@ final class MCPBridge {
         return (workspace, try resolvedURL(for: path, in: workspace))
     }
 
-    private func currentContent(of url: URL, in workspace: Workspace) -> String {
-        workspace.openedDocument(for: url)?.text
-            ?? (try? String(contentsOf: url, encoding: .utf8))
-            ?? ""
-    }
-
-    private func applyEdits(_ edits: [ProposedEdit], to content: String, fileName: String) throws -> String {
+    nonisolated private static func applyEdits(_ edits: [ProposedEdit], to content: String, fileName: String) throws -> String {
         guard !edits.isEmpty else { throw MCPToolFailure("No edits provided.") }
         var working = content
         for (index, edit) in edits.enumerated() {
@@ -185,11 +197,19 @@ final class MCPBridge {
         }
         let approved = await workspace.awaitDiffDecision(proposal)
         if approved {
-            let saved = await workspace.applyProposedEdit(url: url, content: after)
-            guard saved else {
+            // `replacing: before` re-validates on apply: the sheet can stay open
+            // for minutes, and blindly writing the precomputed `after` would
+            // silently revert anything that changed in the meantime.
+            switch await workspace.applyProposedEdit(url: url, content: after, replacing: before) {
+            case .applied:
+                return "Applied changes to \(url.lastPathComponent) (+\(proposal.added) −\(proposal.removed))."
+            case .staleContent:
+                throw MCPToolFailure("\(url.lastPathComponent) changed while the diff was under review, so nothing was applied. Re-read the file and propose the edit again.")
+            case .notWritable:
                 throw MCPToolFailure("Couldn’t write \(url.lastPathComponent) — it may be read-only, binary, or on an unwritable volume. Nothing was changed.")
+            case .saveFailed:
+                throw MCPToolFailure("The approved change was applied to the open editor buffer, but saving \(url.lastPathComponent) to disk failed (read-only file? full volume?). The buffer now shows the change as unsaved; the file on disk is unchanged.")
             }
-            return "Applied changes to \(url.lastPathComponent) (+\(proposal.added) −\(proposal.removed))."
         }
         return "The human declined the changes to \(url.lastPathComponent)."
     }
@@ -274,7 +294,9 @@ final class MCPBridge {
     func askHuman(token: String?, question: String, options: [String]?) async throws -> String {
         let workspace = try workspace(for: token)
         let buttons = (options?.isEmpty == false) ? options! : ["OK"]
-        guard let window = workspace.window else { return buttons[0] }
+        // No window → no way to actually ask; failing is honest, fabricating a
+        // choice (e.g. "yes" to a destructive confirmation) is not.
+        guard let window = workspace.window else { throw MCPBridgeError.noWindow }
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.messageText = "The agent is asking:"

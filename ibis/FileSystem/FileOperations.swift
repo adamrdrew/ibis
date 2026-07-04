@@ -50,9 +50,8 @@ enum FileOperations {
     /// A URL in `directory` that doesn't collide with an existing item, appending
     /// " 2", " 3", … to the stem as needed.
     static func uniqueURL(in directory: URL, baseName: String) -> URL {
-        let fileManager = FileManager.default
         let candidate = directory.appendingPathComponent(baseName)
-        guard fileManager.fileExists(atPath: candidate.path(percentEncoded: false)) else {
+        guard itemExists(at: candidate) else {
             return candidate
         }
         let ext = (baseName as NSString).pathExtension
@@ -61,11 +60,18 @@ enum FileOperations {
         while true {
             let name = ext.isEmpty ? "\(stem) \(index)" : "\(stem) \(index).\(ext)"
             let next = directory.appendingPathComponent(name)
-            if !fileManager.fileExists(atPath: next.path(percentEncoded: false)) {
+            if !itemExists(at: next) {
                 return next
             }
             index += 1
         }
+    }
+
+    /// Whether *anything* occupies this path, including a dangling symlink —
+    /// `fileExists(atPath:)` follows symlinks and reports a broken one as
+    /// absent, which would let `createFile` silently replace it.
+    private static func itemExists(at url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path(percentEncoded: false))) != nil
     }
 
     // MARK: - Shell integrations
