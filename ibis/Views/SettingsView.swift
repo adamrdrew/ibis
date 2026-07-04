@@ -63,6 +63,18 @@ private struct EditorSettingsView: View {
                 Toggle("Show Line Numbers", isOn: $settings.showLineNumbers)
                 Toggle("Wrap Lines", isOn: $settings.wordWrap)
             }
+
+            Section("Project Settings File") {
+                Picker("Opening “.ibis.json”", selection: Binding(
+                    get: { ProjectConfigOpenStore.globalDefault },
+                    set: { ProjectConfigOpenStore.globalDefault = $0 }
+                )) {
+                    ForEach(IbisConfigOpenBehavior.allCases) { Text($0.displayName).tag($0) }
+                }
+                Text("What happens when you open a project’s .ibis.json. A project can override this by choosing “Remember my choice” in the prompt.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .task {

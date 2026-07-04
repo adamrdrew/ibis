@@ -431,7 +431,20 @@ final class Workspace {
     /// Opens (or focuses) the file at `url` as a tab in the active pane. Used by
     /// a file-browser click, which must reopen a file even when its row is
     /// already selected (e.g. after its tab was closed).
+    ///
+    /// Opening this project's own `.ibis.json` is special-cased: it holds the
+    /// project settings the GUI manages, so (per the user's remembered choice)
+    /// it can open the Project Settings editor instead of the raw file.
     func openDocument(at url: URL) {
+        if isProjectConfigFile(url) {
+            handleProjectConfigOpen(at: url)
+            return
+        }
+        openDocumentTab(at: url)
+    }
+
+    /// Opens `url` as an ordinary editor tab (the plain, non-special path).
+    private func openDocumentTab(at url: URL) {
         let document = document(for: url)
         openTicket += 1
         let ticket = openTicket
@@ -448,6 +461,69 @@ final class Workspace {
     /// Orders overlapping `openDocument` requests so a slow load can't finish
     /// last and override a newer click's selection.
     @ObservationIgnored private var openTicket = 0
+
+    // MARK: - Opening .ibis.json
+
+    /// Whether `url` is this project's own `.ibis.json` (the file the Project
+    /// Settings editor manages), so opening it can offer that editor instead.
+    private func isProjectConfigFile(_ url: URL) -> Bool {
+        cacheKey(url) == cacheKey(projectConfig.fileURL)
+    }
+
+    /// Guards against showing two "how to open .ibis.json" prompts for a single
+    /// click — the outline fires both a click action and a selection change.
+    @ObservationIgnored private var isPromptingConfigOpen = false
+
+    /// Routes an open of `.ibis.json` per the effective preference: straight to
+    /// the settings editor, straight to the raw file, or a prompt asking which.
+    private func handleProjectConfigOpen(at url: URL) {
+        switch ProjectConfigOpenStore.effective(for: projectRoot) {
+        case .settings: openProjectSettings()
+        case .text: openDocumentTab(at: url)
+        case .ask: promptProjectConfigOpen(at: url)
+        }
+    }
+
+    /// Loads the config and raises the Project Settings sheet (same as the menu).
+    private func openProjectSettings() {
+        projectConfig.load()
+        projectSettingsRequested = true
+    }
+
+    /// Asks whether to open `.ibis.json` in the Project Settings editor or as raw
+    /// text, with a checkbox to remember the answer for this project.
+    private func promptProjectConfigOpen(at url: URL) {
+        guard !isPromptingConfigOpen else { return }
+        guard let window = window ?? NSApp.keyWindow else {
+            // No window to attach a sheet to — default to the settings editor.
+            openProjectSettings()
+            return
+        }
+        isPromptingConfigOpen = true
+        let alert = NSAlert()
+        alert.messageText = "Open “.ibis.json” in Project Settings?"
+        alert.informativeText = "This file stores this project’s Ibis actions and environment variables. You can edit it in the Project Settings panel, or open the raw JSON in the editor."
+        alert.addButton(withTitle: "Project Settings")
+        alert.addButton(withTitle: "Open as Text")
+        alert.addButton(withTitle: "Cancel")
+        alert.showsSuppressionButton = true
+        alert.suppressionButton?.title = "Remember my choice for this project"
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            self.isPromptingConfigOpen = false
+            let remember = alert.suppressionButton?.state == .on
+            switch response {
+            case .alertFirstButtonReturn: // Project Settings
+                if remember { ProjectConfigOpenStore.setPreference(.settings, for: self.projectRoot) }
+                self.openProjectSettings()
+            case .alertSecondButtonReturn: // Open as Text
+                if remember { ProjectConfigOpenStore.setPreference(.text, for: self.projectRoot) }
+                self.openDocumentTab(at: url)
+            default: // Cancel
+                break
+            }
+        }
+    }
 
     /// Opens a new, empty, untitled document as a tab in the active pane.
     func newUntitledDocument() {
