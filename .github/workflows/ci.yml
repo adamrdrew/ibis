@@ -13,21 +13,20 @@ concurrency:
 jobs:
   test:
     name: Build & Test
-    # Ibis targets macOS 27, so the tests can only *run* on a macOS 27+ runner
-    # (the test-host app's minimum-OS is 27; it won't launch on an older OS even
-    # with the right SDK). If GitHub's hosted image isn't macOS 27 yet, change
-    # `runs-on` to a self-hosted runner on a macOS 27 machine — e.g.
-    #   runs-on: [self-hosted, macOS]
-    runs-on: macos-latest
+    # Ibis's deployment target is macOS 26 (Tahoe), so the tests can only *run*
+    # on a macOS 26+ runner (the test-host app's minimum-OS won't launch on an
+    # older OS). Pin the image rather than using `macos-latest`, which can lag.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
-      # Pin the toolchain. Requires Xcode 27 to be installed on the runner;
-      # remove this step on a self-hosted runner where it's already selected.
-      - name: Select Xcode 27
+      # Use the newest non-beta Xcode on the runner (GitHub images don't carry
+      # betas). Building with a newer SDK against the macOS 26 deployment target
+      # is fine — availability is enforced against the target, not the SDK.
+      - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@v1
         with:
-          xcode-version: '27.0'
+          xcode-version: 'latest-stable'
 
       - name: Show toolchain
         run: xcodebuild -version
