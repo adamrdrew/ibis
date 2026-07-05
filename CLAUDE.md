@@ -189,6 +189,17 @@ disturbed. It can veto the close and re-issue it (via a `proceed` closure /
 `performClose`) once the confirmation resolves. Don't just replace `window.delegate`
 outright — you'll break SwiftUI window handling.
 
+**Building with Xcode 26 (CI) vs the Xcode 27 beta (dev machine).** CI compiles
+with the macOS 26.6 SDK; two things only break there. (1)
+`NSTableViewAppIntentsDataSource` doesn't exist in pre-27 SDKs, so the "Ask
+Siri" wiring in `FileOutlineView` is gated `#if compiler(>=6.4)` (Swift 6.4 ⇔
+Xcode 27) — keep any new 27-SDK-only API behind the same gate. (2) The project
+sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and Xcode 26's compiler
+rejects MainActor-isolated conformances to `Sendable`-constrained protocols
+(Xcode 27's accepts them), so types whose conformances must be nonisolated —
+`IbisMCPServer`, `ProposedEdit`, `WorkspaceFileEntity` — are declared
+`nonisolated`. Do the same for new AppIntents entities or MCP-facing types.
+
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
 view tree and CALayer tree (class, frame, owner) and pixel-probe. That found the

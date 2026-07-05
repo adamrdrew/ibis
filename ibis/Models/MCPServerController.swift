@@ -5,8 +5,14 @@ import SwiftMCP
 
 /// The Ibis MCP server: a thin set of tools that forward onto `MCPBridge` (the
 /// `@MainActor` editor facade). Stateless — all shared state lives in the bridge.
+///
+/// `nonisolated` opts out of the project's MainActor default isolation: the
+/// `@MCPServer`-generated conformances must satisfy SwiftMCP's `Sendable`
+/// requirements, and a MainActor-isolated conformance can't (Xcode 26's
+/// compiler rejects it outright; every tool already hops to the bridge with
+/// `await`, so nothing here needs the main actor).
 @MCPServer(name: "ibis", version: "1.0")
-final class IbisMCPServer {
+nonisolated final class IbisMCPServer {
     /// The bearer token of the current connection, which identifies the project
     /// window this agent is bound to. Every tool routes by this.
     private func projectToken() async -> String? {

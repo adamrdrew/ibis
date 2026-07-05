@@ -9,7 +9,10 @@ import UniformTypeIdentifiers
 ///
 /// Uses AppIntents' built-in `FileEntity`, whose identifier carries the file
 /// URL, so the system can open and read the file to answer questions about it.
-struct WorkspaceFileEntity: FileEntity {
+/// `nonisolated` (opting out of the MainActor default isolation) so the
+/// `FileEntity`/`Sendable` conformances aren't actor-isolated — Xcode 26's
+/// compiler rejects isolated conformances to `Sendable`-constrained protocols.
+nonisolated struct WorkspaceFileEntity: FileEntity {
     static let supportedContentTypes: [UTType] = [.item]
 
     static let typeDisplayRepresentation: TypeDisplayRepresentation = "File"
@@ -22,7 +25,7 @@ struct WorkspaceFileEntity: FileEntity {
         DisplayRepresentation(title: "\(name)")
     }
 
-    struct Query: EntityQuery {
+    nonisolated struct Query: EntityQuery {
         func entities(for identifiers: [FileEntityIdentifier]) async throws -> [WorkspaceFileEntity] {
             var entities: [WorkspaceFileEntity] = []
             for identifier in identifiers {
