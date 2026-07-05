@@ -72,17 +72,20 @@ struct PaneLayoutBridge: NSViewRepresentable {
         }
 
         /// The editor `HSplitView`'s backing `NSSplitView`: the nearest
-        /// `NSSplitView` ancestor (this view lives inside a pane, an
-        /// `_NSSplitViewItemViewWrapper`). `NSSplitViewController`-backed splits
-        /// are skipped: that's `NavigationSplitView`'s split, and latching onto
-        /// it would apply saved *pane* fractions to the sidebar/detail divider —
-        /// its 2 subviews pass the pane-count check whenever 2 panes were saved.
+        /// `NSSplitView` ancestor. This view is installed inside an editor pane
+        /// (an `_NSSplitViewItemViewWrapper`), so by construction the nearest
+        /// such ancestor IS the editor split; the NavigationSplitView's split is
+        /// strictly further up and never reached first.
+        ///
+        /// Deliberately NOT filtered by delegate: SwiftUI backs *both* the
+        /// editor `HSplitView` and the NavigationSplitView with an
+        /// `NSSplitViewController` (the pane wrappers are its machinery), so a
+        /// `delegate is NSSplitViewController` check rejects the editor split
+        /// too — which silently disabled width capture entirely.
         private func editorSplit() -> NSSplitView? {
             var candidate = superview
             while let view = candidate {
-                if let split = view as? NSSplitView, !(split.delegate is NSSplitViewController) {
-                    return split
-                }
+                if let split = view as? NSSplitView { return split }
                 candidate = view.superview
             }
             return nil
@@ -136,7 +139,12 @@ struct PaneLayoutBridge: NSViewRepresentable {
 
         /// Each pane's share of the total pane width (dividers excluded).
         static func fractions(of split: NSSplitView) -> [Double] {
-            let widths = split.arrangedSubviews.map { $0.frame.width }
+            fractions(widths: split.arrangedSubviews.map { $0.frame.width })
+        }
+
+        /// The pure width→fraction math, split out so it's testable without a
+        /// live `NSSplitView`. Empty when there's no width to divide by.
+        static func fractions(widths: [CGFloat]) -> [Double] {
             let total = widths.reduce(0, +)
             guard total > 0 else { return [] }
             return widths.map { Double($0 / total) }
