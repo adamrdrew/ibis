@@ -38,10 +38,15 @@ jobs:
       - name: Run tests
         run: |
           set -o pipefail
+          # -skipMacroValidation: SwiftMCP/JSONFoundation ship macro targets, and
+          # a fresh runner has never "trusted" them (no one can click the Xcode
+          # dialog here), so without it the build fails with "Macro … must be
+          # enabled before it can be used".
           xcodebuild test \
             -project ibis.xcodeproj \
             -scheme ibis \
             -destination 'platform=macOS' \
+            -skipMacroValidation \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO
 
