@@ -7,7 +7,9 @@ configured agent), and a live Git status bar. Opens from Finder, the `ibis` CLI,
 the Services menu, and Shortcuts/Siri App Intents; confirms unsaved changes on
 close. **No** run/debug, LSP, or plugin marketplace.
 
-- **Platform:** macOS only, deployment target **macOS 27**, SwiftUI + AppKit.
+- **Platform:** macOS only, deployment target **macOS 26.0** (so builds run on
+  Tahoe; macOS 27-only niceties like the "Ask Siri" item degrade gracefully),
+  SwiftUI + AppKit.
 - **Hero color:** kelly green (`Color.ibisKelly`), used sparingly for accents.
 - **Not sandboxed.** The App Sandbox was removed so the integrated terminal can
   spawn a real, useful login shell (a sandboxed child shell is crippled — see the
@@ -201,3 +203,15 @@ culprit immediately when source-reading had a 100% failure rate.
   (`LocalProcessTerminalView`). SPM package; pulls in `swift-argument-parser`.
   Requires the sandbox to be off (see terminal gotcha). `Package.resolved`
   committed.
+- **SwiftMCP** (`import SwiftMCP`, guarded by `#if canImport(SwiftMCP)`) — the
+  MCP server (`MCPServerController` / `IbisMCPServer`) agents connect to.
+  **Gotchas, both of which break `xcodebuild` on CLI/CI while the Xcode IDE
+  builds fine:** (1) SwiftPM's CLI resolver chokes on SwiftMCP 1.9's
+  trait-conditional swift-subprocess dependency ("Missing package product
+  'swift-subprocess_Subprocess.Subprocess'"), so the project pins
+  `swift-subprocess` as a **direct** package dependency (linked to no target) —
+  don't remove it. (2) Don't put a `traits = (...)` attribute on the SwiftMCP
+  package reference: the CLI honors the literal list (dropping default traits
+  like `Client`), and the `@MCPServer` macro then fails on the missing
+  Client-trait `MCPServerProxy` type. Restricting to Server-only traits is a
+  dead end for the same reason.

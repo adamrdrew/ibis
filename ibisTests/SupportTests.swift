@@ -149,8 +149,8 @@ import AppKit
         #expect(FileIconProvider.symbolName(forFileURL: URL(filePath: "/p/MAIN.SWIFT")) == "swift")
     }
 
-    @Test func foldersGetTheKellyTint() {
-        #expect(FileIconProvider.tint(for: node("/p/dir", isDirectory: true)) == .ibisKelly)
+    @Test func foldersGetTheAccentTint() {
+        #expect(FileIconProvider.tint(for: node("/p/dir", isDirectory: true)) == .ibisAccent)
         #expect(FileIconProvider.tint(for: node("/p/f.txt", isDirectory: false)) == .secondary)
     }
 }
