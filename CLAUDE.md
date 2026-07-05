@@ -199,6 +199,12 @@ rejects MainActor-isolated conformances to `Sendable`-constrained protocols
 (Xcode 27's accepts them), so types whose conformances must be nonisolated —
 `IbisMCPServer`, `ProposedEdit`, `WorkspaceFileEntity` — are declared
 `nonisolated`. Do the same for new AppIntents entities or MCP-facing types.
+Extra trap on `IbisMCPServer`: `nonisolated` on the class does NOT reach
+conformances the `@MCPServer` macro emits in an extension (Xcode 26 gives the
+extension MainActor default isolation anyway), so the SwiftMCP conformances
+(`MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding`) are
+written explicitly on the class declaration — the macro then skips emitting
+them. Don't remove them as "redundant".
 
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
