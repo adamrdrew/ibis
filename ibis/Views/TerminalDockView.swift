@@ -135,12 +135,12 @@ private struct TerminalExitedOverlay: View {
                 if isActive {
                     Button("Restart", action: onRestart)
                         .buttonStyle(.borderedProminent)
-                        .tint(Color.ibisKelly)
+                        .tint(Color.ibisAccent)
                         .keyboardShortcut(.return, modifiers: [])
                 } else {
                     Button("Restart", action: onRestart)
                         .buttonStyle(.borderedProminent)
-                        .tint(Color.ibisKelly)
+                        .tint(Color.ibisAccent)
                 }
             }
             .padding(24)

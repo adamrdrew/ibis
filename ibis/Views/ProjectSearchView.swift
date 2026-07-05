@@ -184,7 +184,7 @@ struct ProjectSearchView: View {
         result.foregroundColor = .secondary
 
         var emphasized = AttributedString(matchText)
-        emphasized.foregroundColor = .ibisKelly
+        emphasized.foregroundColor = .ibisAccent
         emphasized.inlinePresentationIntent = .stronglyEmphasized
 
         var tail = AttributedString(suffix)

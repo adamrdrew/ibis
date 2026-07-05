@@ -58,7 +58,7 @@ private struct TerminalTabItemView: View {
         .overlay(alignment: .bottom) {
             if isCurrent {
                 Rectangle()
-                    .fill(Color.ibisKelly)
+                    .fill(Color.ibisAccent)
                     .frame(height: 2)
             }
         }

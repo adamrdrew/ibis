@@ -60,6 +60,7 @@ struct FileOutlineView: NSViewRepresentable {
         outlineView.coordinator = context.coordinator
         context.coordinator.outlineView = outlineView
         context.coordinator.installReloadBridge()
+        context.coordinator.observeAccentChanges()
         outlineView.reloadData()
 
         return scrollView
@@ -88,9 +89,39 @@ struct FileOutlineView: NSViewRepresentable {
         /// would fail against the now-missing old name and flash it back).
         private var renameInFlight = false
 
+        private var accentObserver: NSObjectProtocol?
+
         init(workspace: Workspace, selection: Binding<FileNode.ID?>) {
             self.workspace = workspace
             self.selection = selection
+        }
+
+        /// Folder icons are tinted with a cached `NSColor`, so re-tint them when
+        /// the user changes the system accent so they follow it live.
+        func observeAccentChanges() {
+            accentObserver = NotificationCenter.default.addObserver(
+                forName: NSColor.systemColorsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.retintDirectoryIcons() }
+            }
+        }
+
+        private func retintDirectoryIcons() {
+            guard let outlineView else { return }
+            for row in 0..<outlineView.numberOfRows {
+                guard let node = outlineView.item(atRow: row) as? FileNode, node.isDirectory,
+                      let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView
+                else { continue }
+                cell.imageView?.contentTintColor = .ibisAccent
+            }
+        }
+
+        deinit {
+            if let accentObserver {
+                NotificationCenter.default.removeObserver(accentObserver)
+            }
         }
 
         /// Wire filesystem/operation reloads to `NSOutlineView.reloadItem`.
@@ -211,7 +242,7 @@ struct FileOutlineView: NSViewRepresentable {
                 accessibilityDescription: node.isDirectory ? "Folder" : "File"
             )
             cell.imageView?.contentTintColor = node.isDirectory
-                ? NSColor(Color.ibisKelly)
+                ? .ibisAccent
                 : .secondaryLabelColor
             return cell
         }

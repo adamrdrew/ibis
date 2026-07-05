@@ -93,7 +93,7 @@ private struct TabItemView: View {
         .overlay(alignment: .bottom) {
             if isCurrent {
                 Rectangle()
-                    .fill(isPaneActive ? Color.ibisKelly : Color.secondary)
+                    .fill(isPaneActive ? Color.ibisAccent : Color.secondary)
                     .frame(height: 2)
             }
         }

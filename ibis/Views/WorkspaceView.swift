@@ -558,7 +558,7 @@ private struct MCPBannerView: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(Color.ibisKelly)
+                .foregroundStyle(Color.ibisAccent)
             Text(text)
                 .font(.callout)
                 .lineLimit(2)

@@ -33,7 +33,7 @@ struct StatusBarView: View {
             if info.isDirty {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(Color.ibisKelly)
+                        .fill(Color.ibisAccent)
                         .frame(width: 6, height: 6)
                     Text("Changes")
                 }

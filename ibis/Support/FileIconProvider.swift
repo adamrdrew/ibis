@@ -11,7 +11,7 @@ enum FileIconProvider {
     }
 
     static func tint(for node: FileNode) -> Color {
-        node.isDirectory ? .ibisKelly : .secondary
+        node.isDirectory ? .ibisAccent : .secondary
     }
 
     /// Symbol for a plain file URL (used by tabs, which have no `FileNode`).

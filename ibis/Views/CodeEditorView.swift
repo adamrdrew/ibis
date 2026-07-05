@@ -66,7 +66,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isAutomaticLinkDetectionEnabled = false
         textView.textContainerInset = NSSize(width: 6, height: 8)
         textView.backgroundColor = NSColor.textBackgroundColor
-        textView.insertionPointColor = NSColor(Color.ibisKelly)
+        textView.insertionPointColor = .ibisAccent
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
 
@@ -92,6 +92,7 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.ruler = ruler
         context.coordinator.observeScrolling(in: scrollView)
+        context.coordinator.observeAccentChanges()
 
         // The shared storage already holds the text; no need to assign a string.
         configure(textView, in: scrollView, ruler: ruler)
@@ -277,9 +278,24 @@ struct CodeEditorView: NSViewRepresentable {
         weak var textView: NSTextView?
         weak var ruler: LineNumberRulerView?
         private var boundsObserver: NSObjectProtocol?
+        private var accentObserver: NSObjectProtocol?
 
         init(document: OpenDocument) {
             self.document = document
+        }
+
+        /// The insertion-point color is a cached `NSColor`, so re-apply it when
+        /// the user changes the system accent so the caret follows live.
+        func observeAccentChanges() {
+            accentObserver = NotificationCenter.default.addObserver(
+                forName: NSColor.systemColorsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.textView?.insertionPointColor = .ibisAccent
+                }
+            }
         }
 
         func observeScrolling(in scrollView: NSScrollView) {
@@ -385,7 +401,7 @@ struct CodeEditorView: NSViewRepresentable {
 
             let backgroundColor = result.background?.nsColor ?? .textBackgroundColor
             textView.backgroundColor = backgroundColor
-            textView.insertionPointColor = NSColor(Color.ibisKelly)
+            textView.insertionPointColor = .ibisAccent
             ruler?.backgroundColor = backgroundColor
             ruler?.needsDisplay = true
 
@@ -468,6 +484,9 @@ struct CodeEditorView: NSViewRepresentable {
         deinit {
             if let boundsObserver {
                 NotificationCenter.default.removeObserver(boundsObserver)
+            }
+            if let accentObserver {
+                NotificationCenter.default.removeObserver(accentObserver)
             }
         }
     }

@@ -22,7 +22,7 @@ struct DiffReviewView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(Color.ibisKelly)
+                .foregroundStyle(Color.ibisAccent)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Proposed edit")
                     .font(.headline)
@@ -74,7 +74,7 @@ struct DiffReviewView: View {
             Button("Apply", action: onApply)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .tint(Color.ibisKelly)
+                .tint(Color.ibisAccent)
         }
         .padding(12)
     }

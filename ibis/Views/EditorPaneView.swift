@@ -22,7 +22,7 @@ struct EditorPaneView: View {
         .overlay(alignment: .top) {
             if isActive && hasMultiplePanes {
                 Rectangle()
-                    .fill(Color.ibisKelly)
+                    .fill(Color.ibisAccent)
                     .frame(height: 2)
             }
         }

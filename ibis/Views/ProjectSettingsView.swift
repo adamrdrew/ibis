@@ -98,7 +98,7 @@ struct ProjectSettingsView: View {
     private func addButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: "plus.circle.fill")
-                .foregroundStyle(Color.ibisKelly)
+                .foregroundStyle(Color.ibisAccent)
         }
         .buttonStyle(.borderless)
     }
