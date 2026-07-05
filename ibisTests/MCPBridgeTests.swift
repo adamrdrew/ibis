@@ -9,16 +9,12 @@ import AppKit
 /// Serialized: the bridge is a process-wide singleton.
 @MainActor
 @Suite(.serialized) struct MCPBridgeTests {
-    private static let preservedKeys = [
-        "mcp.projectTokens.v1", "workspace.trust.v1", "workspaceState.v1",
-    ]
-
     /// A registered workspace over a fresh temp dir, unregistered afterward so
     /// state can't leak between tests through the shared bridge.
     private func withBridgedWorkspace<T>(
         _ body: (Workspace, String, URL) async throws -> T
     ) async throws -> T {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 let token = MCPBridge.shared.register(workspace)
@@ -51,7 +47,7 @@ import AppKit
     }
 
     @Test func unregisterInvalidatesTheToken() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 let token = MCPBridge.shared.register(workspace)

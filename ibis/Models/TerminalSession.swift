@@ -10,12 +10,20 @@ import SwiftTerm
 @MainActor
 final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// What a session is for. The `run` session is a single reusable tab that
-    /// project actions execute in.
-    enum Role { case shell, agent, run }
+    /// project actions execute in. String-backed so persistence stores the role
+    /// without hand-mapped literals (only `.shell`/`.agent` are ever persisted).
+    enum Role: String, Codable { case shell, agent, run }
 
     let id = UUID()
     let workingDirectory: URL
     let role: Role
+
+    /// For a Claude agent tab, the stable session UUID this tab was launched with
+    /// (`claude --session-id <uuid>`), so window-layout restoration can bring the
+    /// conversation back via `claude --resume <uuid>`. Nil for shells and agents
+    /// that don't support session resume. Excluded from observation — it's plumbing
+    /// for persistence, not UI state.
+    @ObservationIgnored var agentSessionID: String?
 
     /// A specific command to run as a login shell (e.g. an agent or a project
     /// action), or nil for a plain interactive shell. Mutable so the reusable
@@ -45,6 +53,16 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Called when the shell process exits (used by the action runner).
     @ObservationIgnored var onExit: (() -> Void)?
 
+    /// Called when the process exits naturally, with its exit code and how long
+    /// it ran. Window restore uses this to detect a Claude `--resume` that failed
+    /// because the old session is gone, so it can recover into a fresh session.
+    /// Its presence is the "recovery armed" state: the recovery handler nils it
+    /// out once it declines to act, so a later exit can't re-trigger it.
+    @ObservationIgnored var onProcessExit: ((_ exitCode: Int32?, _ ranFor: TimeInterval) -> Void)?
+
+    /// When the current process was started, to measure a quick failure.
+    @ObservationIgnored private var startedAt: Date?
+
     /// Requests that this session's terminal view take keyboard focus once it is
     /// built and in a window. Set when a new terminal or agent tab is opened, so
     /// the user can start typing immediately.
@@ -55,11 +73,13 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         command: String? = nil,
         title: String? = nil,
         role: Role = .shell,
+        agentSessionID: String? = nil,
         extraEnvironment: [String: String] = [:]
     ) {
         self.workingDirectory = workingDirectory
         self.command = command
         self.role = role
+        self.agentSessionID = agentSessionID
         self.extraEnvironment = extraEnvironment
         let resolvedTitle = title ?? workingDirectory.lastPathComponent
         self.defaultTitle = resolvedTitle
@@ -89,9 +109,14 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         // Make the mouse wheel scroll full-screen TUIs (Claude Code, less, vim…).
         TerminalScrollFix.installIfNeeded()
 
-        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
+        let view = IbisTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
         view.font = font
+        // Match SwiftTerm's release behavior in debug builds: `silentLog`
+        // defaults to false under DEBUG, printing "Unknown OSC code: 133" for
+        // every shell-integration prompt mark the shell or an agent TUI emits —
+        // one console line per keystroke.
+        view.getTerminal().silentLog = true
         terminalView = view
         // Start the shell *after* this view-building pass: `startShell` mutates
         // observed state (title/isRunning/exitCode), which must not happen while
@@ -115,9 +140,13 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         terminalView?.font = font
     }
 
-    /// Restarts the shell in the existing view after it has exited.
-    func restart(shellOverride: String?) {
+    /// Restarts the shell in the existing view after it has exited. Pass
+    /// `command` to replace what the tab runs — an agent tab must restart via
+    /// `--resume` once its session exists on disk, because re-running its
+    /// original `--session-id` launch is rejected ("Session ID already in use").
+    func restart(shellOverride: String?, command: String? = nil) {
         guard let terminalView, !isRunning else { return }
+        if let command { self.command = command }
         startShell(shellOverride: shellOverride, on: terminalView)
     }
 
@@ -150,8 +179,23 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
             execName: shell.execName,
             currentDirectory: workingDirectory.path(percentEncoded: false)
         )
+        startedAt = Date()
         isRunning = true
         hasStarted = true
+    }
+
+    /// Writes a yellow notice into the terminal and re-runs the tab in the same
+    /// view. With no arguments the current command is retried verbatim (a
+    /// `--resume` rejected while the previous window's agent finished shutting
+    /// down); pass `command`/`agentSessionID` to relaunch as a fresh session
+    /// after a resume whose conversation is gone for good.
+    func relaunch(notice: String, command: String? = nil, agentSessionID: String? = nil) {
+        guard let terminalView, !isRunning else { return }
+        if let command { self.command = command }
+        if let agentSessionID { self.agentSessionID = agentSessionID }
+        // Notice line first, then the relaunched command's output follows below.
+        terminalView.feed(text: "\r\n\u{1b}[33m" + notice + "\u{1b}[0m\r\n")
+        startShell(shellOverride: lastShellOverride, on: terminalView)
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
@@ -170,6 +214,8 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         guard isRunning else { return }
         self.exitCode = exitCode
         isRunning = false
+        let ranFor = startedAt.map { Date().timeIntervalSince($0) } ?? .infinity
         onExit?()
+        onProcessExit?(exitCode, ranFor)
     }
 }

@@ -26,7 +26,7 @@ enum IbisConfigOpenBehavior: String, CaseIterable, Identifiable {
 /// "no override, follow the global default".
 @MainActor
 enum ProjectConfigOpenStore {
-    private static let defaults = UserDefaults.standard
+    private static var defaults: UserDefaults { IbisDefaults.store }
     private static let globalKey = "ibisConfig.openBehavior"
     private static let perProjectKey = "ibisConfig.perProject"
 

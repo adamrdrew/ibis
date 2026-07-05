@@ -1,6 +1,18 @@
 import AppKit
 import SwiftTerm
 
+/// The terminal view Ibis instantiates: SwiftTerm's `LocalProcessTerminalView`
+/// minus its per-keystroke debug chatter. SwiftTerm's `NSTextInputClient`
+/// conformance `print`s "Attribuetd string" (sic) every time the text-input
+/// system asks for an attributed substring — i.e. on every keystroke. Upstream
+/// returns nil after printing; the method is `open`, so this override keeps the
+/// behavior and drops the print.
+final class IbisTerminalView: LocalProcessTerminalView {
+    override func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
+        nil
+    }
+}
+
 /// Makes the mouse wheel scroll full-screen TUIs in the integrated terminal.
 ///
 /// SwiftTerm's `scrollWheel` only moves the native scrollback — but the

@@ -25,18 +25,17 @@ enum WorkspaceTrust {
     static func setTrusted(_ trusted: Bool, for root: URL) {
         var current = map()
         current[canonicalPath(root)] = trusted
-        UserDefaults.standard.set(current, forKey: key)
+        IbisDefaults.store.set(current, forKey: key)
     }
 
     private static func map() -> [String: Bool] {
-        UserDefaults.standard.dictionary(forKey: key) as? [String: Bool] ?? [:]
+        IbisDefaults.store.dictionary(forKey: key) as? [String: Bool] ?? [:]
     }
 
     /// A stable key for a root: symlinks resolved, no trailing slash — so a
     /// folder maps to one decision however its path was expressed.
     private static func canonicalPath(_ root: URL) -> String {
-        var path = root.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
-        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
-        return path
+        root.resolvingSymlinksInPath().standardizedFileURL
+            .path(percentEncoded: false).strippingTrailingSlashes
     }
 }

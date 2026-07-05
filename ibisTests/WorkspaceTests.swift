@@ -9,15 +9,11 @@ import Foundation
 /// (trust, layout snapshots, MCP tokens).
 @MainActor
 @Suite(.serialized) struct WorkspaceTests {
-    private static let preservedKeys = [
-        "workspaceState.v1", "workspace.trust.v1", "mcp.projectTokens.v1",
-    ]
-
     /// Builds a folder workspace over a fresh temp dir and runs `body`.
     private func withWorkspace<T>(
         _ body: (Workspace, URL) async throws -> T
     ) async throws -> T {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 return try await body(workspace, dir)
@@ -41,7 +37,7 @@ import Foundation
     }
 
     @Test func singleFileWorkspaceUsesParentAsProjectRoot() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let file = try writeFile("solo.txt", "x", in: dir)
                 let workspace = Workspace(rootURL: file, isDirectory: false)
@@ -71,7 +67,7 @@ import Foundation
     }
 
     @Test func cacheCollapsesSymlinkSpellingsOfTheSameFile() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             // /tmp is a symlink to /private/tmp on macOS — the classic two
             // spellings of one file.
             let name = "ibis-symlink-test-\(UUID().uuidString)"
@@ -255,7 +251,7 @@ import Foundation
     }
 
     @Test func persistedLayoutRestoresTabsPanesAndSelection() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let first = Workspace(rootURL: dir, isDirectory: true)
                 let urlA = dir.appending(path: "a.txt")
@@ -270,7 +266,9 @@ import Foundation
                 pane.open(docA)
                 pane.open(docB)
                 pane.selectedID = docA.id
-                first.persistLayoutState()
+                // Persistence is gated until restoration completes; finishing
+                // it also flushes the snapshot.
+                first.finishRestoration()
 
                 // A fresh workspace over the same root restores the layout.
                 let second = Workspace(rootURL: dir, isDirectory: true)
@@ -283,7 +281,7 @@ import Foundation
     }
 
     @Test func restoreSkipsMissingFilesAndResolvesSelectionByPath() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let survivor = dir.appending(path: "survivor.txt")
                 try "s".write(to: survivor, atomically: true, encoding: .utf8)
@@ -310,7 +308,7 @@ import Foundation
     }
 
     @Test func restoreDoesNothingWhenTabsAreAlreadyOpen() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let url = dir.appending(path: "x.txt")
                 try "x".write(to: url, atomically: true, encoding: .utf8)
@@ -327,6 +325,219 @@ import Foundation
                 await workspace.restorePersistedLayout()
                 #expect(workspace.layout.activePane?.tabDocuments.count == 1)
                 #expect(workspace.layout.activePane?.selectedDocument?.isUntitled == true)
+            }
+        }
+    }
+
+    @Test func layoutFingerprintTracksTerminalDock() async throws {
+        try await withWorkspace { workspace, _ in
+            let before = workspace.layoutFingerprint
+            workspace.terminal.newSession(title: "one", takeFocus: false)
+            let afterOpen = workspace.layoutFingerprint
+            #expect(afterOpen != before)
+            workspace.terminal.isVisible = true
+            #expect(workspace.layoutFingerprint != afterOpen)
+        }
+    }
+
+    @Test func persistLayoutStateIsGatedUntilFinishRestorationFlushes() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                let url = dir.appending(path: "gated.txt")
+                try "g".write(to: url, atomically: true, encoding: .utf8)
+                let doc = workspace.document(for: url)
+                await doc.loadIfNeeded()
+                workspace.layout.activePane?.open(doc)
+
+                // Mimics the user opening a file while restore is still running:
+                // the fingerprint-change persist fires but must be a no-op.
+                workspace.persistLayoutState()
+                #expect(WorkspaceStateStore.load(for: dir) == nil)
+
+                // Finishing restoration flushes exactly that pending state, so
+                // it isn't lost if nothing changes again afterward.
+                workspace.finishRestoration()
+                let saved = WorkspaceStateStore.load(for: dir)
+                #expect(saved?.paneFilePaths == [[url.path(percentEncoded: false)]])
+            }
+        }
+    }
+
+    @Test func openingAWorkspaceWithMissingFilesKeepsTheSavedLayout() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                // A saved layout that references a file which no longer exists —
+                // e.g. a branch switch removed it, or the volume isn't mounted.
+                let goneA = dir.appending(path: "gone-a.txt").path(percentEncoded: false)
+                let goneB = dir.appending(path: "gone-b.txt").path(percentEncoded: false)
+                let saved = PersistedWorkspaceState(
+                    paneFilePaths: [[goneA, goneB]],
+                    selectedTabPerPane: [0],
+                    activePaneIndex: 0,
+                    savedAt: Date()
+                )
+                WorkspaceStateStore.save(saved, for: dir)
+
+                // Simply opening the window must not overwrite it: restore finds
+                // nothing on disk, but the saved snapshot has to survive so the
+                // files come back when they reappear.
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                let settings = AppSettings()
+                await workspace.restoreSession(settings: settings)
+
+                let stored = try #require(WorkspaceStateStore.load(for: dir))
+                #expect(stored.paneFilePaths == [[goneA, goneB]])
+            }
+        }
+    }
+
+    /// A persisted state whose editor layout is empty, carrying just a dock.
+    private func stateWithTerminal(_ dock: PersistedTerminalDock) -> PersistedWorkspaceState {
+        PersistedWorkspaceState(
+            paneFilePaths: [],
+            selectedTabPerPane: [],
+            activePaneIndex: 0,
+            savedAt: Date(),
+            terminal: dock
+        )
+    }
+
+    @Test func restoreSessionRestoresTerminalDock() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "" // no agent configured
+                let sid = UUID().uuidString
+                WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
+                    sessions: [
+                        PersistedTerminalSession(role: .shell, title: "zsh", agentSessionID: nil),
+                        PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid),
+                    ],
+                    activeSessionIndex: 1,
+                    isVisible: true
+                )), for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                await workspace.restoreSession(settings: settings)
+
+                let sessions = workspace.terminal.sessions
+                #expect(sessions.map(\.role) == [.shell, .agent])
+                // No agent configured: the tab is preserved with its pointer
+                // intact, so it survives until an agent is configured again.
+                #expect(sessions.last?.agentSessionID == sid)
+                #expect(workspace.terminal.activeSessionID == sessions.last?.id)
+                #expect(workspace.terminal.isVisible)
+                #expect(workspace.restorationComplete)
+            }
+        }
+    }
+
+    @Test func restoreSessionKeepsTerminalsTheUserOpenedMeanwhile() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = ""
+                let sid = UUID().uuidString
+                WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
+                    sessions: [
+                        PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid),
+                    ],
+                    activeSessionIndex: 0,
+                    isVisible: true
+                )), for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                // The user opens a terminal while the (slow) editor restore is
+                // still awaiting: the persisted tabs must restore alongside it,
+                // not be silently dropped (the next snapshot would then
+                // permanently lose the agent session pointer).
+                let userTab = workspace.terminal.newSession()
+                await workspace.restoreSession(settings: settings)
+
+                #expect(workspace.terminal.sessions.count == 2)
+                #expect(workspace.terminal.sessions.contains { $0.agentSessionID == sid })
+                // The user's tab keeps focus.
+                #expect(workspace.terminal.activeSessionID == userTab.id)
+            }
+        }
+    }
+
+    @Test func restoreSessionPreservesPointerWhenAgentSwitchedAway() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "codex"
+                settings.agentArgs = ""
+                settings.agentKind = .codex
+                let sid = UUID().uuidString
+                WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
+                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid)],
+                    activeSessionIndex: 0,
+                    isVisible: true
+                )), for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                await workspace.restoreSession(settings: settings)
+
+                // The tab relaunches as the newly configured agent, but the
+                // Claude session pointer must ride along: switching back to
+                // Claude later can still resume the old conversation.
+                let restored = try #require(workspace.terminal.sessions.first)
+                #expect(restored.command == "codex")
+                #expect(restored.agentSessionID == sid)
+            }
+        }
+    }
+
+    @Test func restoreSessionMintsSessionIDForUntrackedClaudeTab() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "claude"
+                settings.agentArgs = ""
+                settings.agentKind = .claude
+                settings.agentInjectSystemPrompt = false
+                WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
+                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: nil)],
+                    activeSessionIndex: 0,
+                    isVisible: true
+                )), for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                await workspace.restoreSession(settings: settings)
+
+                // A tab persisted before session tracking has no id; restoring
+                // it must mint one (like every fresh launch) so the *new*
+                // conversation is resumable, rather than launching untracked.
+                let restored = try #require(workspace.terminal.sessions.first)
+                let minted = try #require(restored.agentSessionID)
+                #expect(UUID(uuidString: minted) != nil)
+                #expect(restored.command == "claude --session-id " + minted)
+            }
+        }
+    }
+
+    @Test func launchConfiguredAgentPinsClaudeSession() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "claude"
+                settings.agentArgs = ""
+                settings.agentKind = .claude
+                settings.agentInjectSystemPrompt = false
+
+                // Every launch route goes through this one entry point, so a
+                // menu-bar launch is just as restorable as the toolbar's.
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                workspace.launchConfiguredAgent(settings: settings)
+
+                let tab = try #require(workspace.terminal.sessions.first)
+                #expect(tab.role == .agent)
+                let sid = try #require(tab.agentSessionID)
+                #expect(UUID(uuidString: sid) != nil)
+                #expect(tab.command == "claude --session-id " + sid)
+                #expect(workspace.terminal.isVisible)
             }
         }
     }
@@ -397,7 +608,7 @@ import Foundation
     // MARK: Trust & project actions
 
     @Test func untrustedFolderWithExecutableConfigPromptsAndWithholdsEnv() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let config = #"{"env": {"FOO": "bar"}, "actions": [{"name": "build", "command": "make"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
@@ -418,7 +629,7 @@ import Foundation
     }
 
     @Test func grantingTrustAppliesEnvAndExposesActions() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let config = #"{"env": {"FOO": "bar"}, "actions": [{"name": "build", "command": "make"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
@@ -445,7 +656,7 @@ import Foundation
     }
 
     @Test func runProjectActionIsNoOpWhenUntrusted() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let config = #"{"actions": [{"name": "evil", "command": "true"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
@@ -596,7 +807,7 @@ import Foundation
     }
 
     @Test func trustedProjectActionRunsAndStops() async throws {
-        try await TestSupport.withPreservedDefaults(Self.preservedKeys) {
+        try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let config = #"{"actions": [{"name": "noop", "command": "true"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)

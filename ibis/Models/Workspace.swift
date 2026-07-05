@@ -324,13 +324,63 @@ final class Workspace {
         }
         let activeIndex = layout.panes.firstIndex { $0.id == layout.activePaneID } ?? 0
         parts.append("active=\(activeIndex)")
+        // Terminal dock: recreate a persist when the set of tabs, their roles /
+        // session ids, the active tab, or dock visibility change. Titles are
+        // deliberately excluded — an agent rewrites its tab title constantly and
+        // would otherwise churn the store on every keystroke of output.
+        for session in terminal.persistableSessions {
+            parts.append("t:\(session.role):\(session.agentSessionID ?? String(describing: session.id))")
+        }
+        parts.append("term=\(terminal.activePersistableIndex):\(terminal.isVisible)")
         return parts.joined(separator: ";")
     }
 
-    /// Snapshots the current layout to the store (directory workspaces only;
-    /// untitled documents, having no path, are skipped).
+    /// True once the window has finished restoring its persisted layout; a
+    /// persist can't run before then. Without this gate, assigning the fresh
+    /// (empty) workspace fires `WorkspaceView`'s `layoutFingerprint` `onChange`
+    /// and saves an empty snapshot *over* the real saved state before
+    /// `restorePersistedLayout` gets to read it — losing every tab and terminal.
+    /// Flipped only by `finishRestoration()`, which also flushes once.
+    @ObservationIgnored private(set) var restorationComplete = false
+
+    /// Marks restoration finished and, if anything actually restored, writes the
+    /// current state once. The flush matters: persistence triggers are
+    /// edge-triggered (`onChange` of the fingerprint), so anything the user
+    /// changed *while* restore was still running fired only gated no-op
+    /// persists — without writing now, that state would be lost unless something
+    /// changed again later.
+    ///
+    /// The empty-content guard is the safety valve: if restore produced nothing
+    /// (its files are temporarily missing, its data was already cleared, …), we
+    /// must NOT write a blank snapshot over a saved layout — merely opening a
+    /// window would otherwise erase it. A genuinely-empty workspace has nothing
+    /// to lose, and real user actions after this persist normally.
+    func finishRestoration() {
+        restorationComplete = true
+        guard hasPersistableLayout else { return }
+        persistLayoutState()
+    }
+
+    /// Whether the current layout holds anything worth persisting: at least one
+    /// open editor tab or one persistable terminal tab (shell/agent).
+    var hasPersistableLayout: Bool {
+        layout.panes.contains { !$0.tabDocuments.isEmpty } || !terminal.persistableSessions.isEmpty
+    }
+
+    /// Each editor pane's share of the split width, kept current by
+    /// `PaneLayoutBridge` (which watches the AppKit split view) and included in
+    /// every persisted snapshot. Excluded from observation: it updates per
+    /// pixel during a divider drag, and nothing renders from it.
+    @ObservationIgnored var paneWidthFractions: [Double]?
+
+    /// Restored fractions waiting for the split view to grow its panes, applied
+    /// and then cleared by `PaneLayoutBridge`. While non-nil, the bridge pauses
+    /// recording, so the initial equal-width layout can't overwrite the saved
+    /// proportions.
+    @ObservationIgnored var pendingPaneWidthFractions: [Double]?
+
     func persistLayoutState() {
-        guard isDirectory else { return }
+        guard isDirectory, restorationComplete else { return }
         var paneFilePaths: [[String]] = []
         var selected: [Int] = []
         for pane in layout.panes {
@@ -349,17 +399,56 @@ final class Workspace {
                 paneFilePaths: paneFilePaths,
                 selectedTabPerPane: selected,
                 activePaneIndex: activeIndex,
-                savedAt: Date()
+                savedAt: Date(),
+                terminal: terminalSnapshot(),
+                paneWidthFractions: paneWidthFractions
             ),
             for: rootURL
         )
     }
 
+    /// Snapshots the terminal dock for persistence: every tab except the reusable
+    /// `.run` project-action tab, the active tab's index, and dock visibility.
+    private func terminalSnapshot() -> PersistedTerminalDock {
+        let sessions = terminal.persistableSessions.map { session in
+            PersistedTerminalSession(
+                role: session.role,
+                title: session.title,
+                agentSessionID: session.agentSessionID
+            )
+        }
+        return PersistedTerminalDock(
+            sessions: sessions,
+            activeSessionIndex: terminal.activePersistableIndex,
+            isVisible: terminal.isVisible
+        )
+    }
+
+    /// Restores the whole persisted session — editor layout, then the terminal
+    /// dock on top — and opens the persistence gate. The single entry point a
+    /// window calls after loading the file tree, so any surface that
+    /// materializes a workspace gets identical restore behavior.
+    func restoreSession(settings: AppSettings) async {
+        guard !restorationComplete else { return }
+        if isDirectory {
+            let state = WorkspaceStateStore.load(for: rootURL)
+            await restorePersistedLayout(state)
+            if let dock = state?.terminal {
+                restoreTerminalDock(dock, settings: settings)
+            }
+        }
+        finishRestoration()
+    }
+
     /// Restores the persisted tabs/panes/selection into a fresh layout. Missing
     /// files are silently skipped; if everything is gone, the empty state stays.
     func restorePersistedLayout() async {
+        await restorePersistedLayout(WorkspaceStateStore.load(for: rootURL))
+    }
+
+    private func restorePersistedLayout(_ state: PersistedWorkspaceState?) async {
         guard isDirectory,
-              let state = WorkspaceStateStore.load(for: rootURL),
+              let state,
               layout.panes.count == 1, layout.panes[0].tabDocuments.isEmpty else { return }
 
         // Check tab existence off the main actor: with many persisted tabs on a
@@ -398,6 +487,134 @@ final class Workspace {
         layout.panes = panes
         let activeIndex = min(max(0, state.activePaneIndex), panes.count - 1)
         layout.activePaneID = panes[activeIndex].id
+
+        // Saved pane widths only make sense if every pane survived (missing
+        // files can drop panes above); PaneLayoutBridge applies them once the
+        // AppKit split view has grown the restored panes.
+        if let fractions = state.paneWidthFractions, fractions.count == panes.count {
+            paneWidthFractions = fractions
+            pendingPaneWidthFractions = fractions.count > 1 ? fractions : nil
+        }
+    }
+
+    /// Recreates the persisted terminal dock. Every persisted tab comes back —
+    /// dropping one would let the next snapshot overwrite the store without it,
+    /// permanently losing its agent session pointer. Agent tabs restore
+    /// regardless of folder trust: a persisted agent tab exists only because
+    /// the user launched one here themselves (the trust gate exists for
+    /// Shortcut/Siri launches into folders the user has never seen, which can't
+    /// have a snapshot). The user may already have opened a terminal during the
+    /// editor-restore awaits — their tabs are kept, stay selected, and the
+    /// restored tabs are added alongside rather than being silently discarded.
+    private func restoreTerminalDock(_ dock: PersistedTerminalDock, settings: AppSettings) {
+        guard !dock.sessions.isEmpty else { return }
+        let hadUserSessions = !terminal.sessions.isEmpty
+        let userActiveID = terminal.activeSessionID
+
+        var restored: [TerminalSession] = []
+        for session in dock.sessions {
+            if session.role == .agent {
+                restored.append(restoreAgentTab(session, settings: settings))
+            } else {
+                restored.append(terminal.newSession(title: session.title, takeFocus: false))
+            }
+        }
+
+        if hadUserSessions {
+            // The user's freshly opened terminal keeps focus and dock state.
+            terminal.activeSessionID = userActiveID
+        } else {
+            if dock.activeSessionIndex >= 0, dock.activeSessionIndex < restored.count {
+                terminal.activeSessionID = restored[dock.activeSessionIndex].id
+            }
+            terminal.isVisible = dock.isVisible
+        }
+    }
+
+    /// Restores one persisted agent tab. For Claude, the launch resumes the
+    /// stored session if its conversation exists on disk, re-pins the same
+    /// `--session-id` if not (Claude only writes the transcript on the first
+    /// message, so resuming a never-used session would just fail), and mints a
+    /// fresh id for a tab persisted without one, so its new conversation is
+    /// resumable like any other. A non-Claude agent relaunches fresh but keeps
+    /// any stored Claude session pointer on the tab, and a tab with no agent
+    /// configured comes back as a plain shell that keeps its role and pointer —
+    /// in every case the pointer survives until Claude is configured again.
+    private func restoreAgentTab(_ session: PersistedTerminalSession, settings: AppSettings) -> TerminalSession {
+        if settings.agentKind == .claude {
+            let sid = session.agentSessionID ?? UUID().uuidString
+            if let (command, resume) = MCPService.agentRelaunchCommand(
+                settings: settings, sessionID: sid, workingDirectory: projectRoot
+            ) {
+                MCPService.bindAgent(to: self, settings: settings)
+                let restored = terminal.newSession(
+                    command: command, title: session.title,
+                    role: .agent, agentSessionID: sid, takeFocus: false
+                )
+                if resume { armResumeRecovery(for: restored, settings: settings) }
+                return restored
+            }
+        } else if let command = MCPService.launchCommand(settings: settings) {
+            MCPService.bindAgent(to: self, settings: settings)
+            return terminal.newSession(
+                command: command, title: session.title,
+                role: .agent, agentSessionID: session.agentSessionID, takeFocus: false
+            )
+        }
+        // No agent configured: preserve the tab (and its session pointer).
+        return terminal.newSession(
+            title: session.title,
+            role: .agent, agentSessionID: session.agentSessionID, takeFocus: false
+        )
+    }
+
+    /// Recovers a restored Claude tab whose `--resume` failed because the prior
+    /// session no longer exists (`claude` prints "No conversation found" and
+    /// exits 1 within a second): the tab relaunches as a *fresh* session (new
+    /// tracked id) behind a notice, and the new id is persisted so future
+    /// restores resume the new conversation. When the transcript still exists,
+    /// the id is never replaced — a fast failure then means claude rejected the
+    /// resume ("already in use") while the previous window's agent finished
+    /// shutting down, so the same resume is retried (bounded) after a pause.
+    /// The handler disarms itself on the first exit it declines to act on, so a
+    /// deliberate quit of a successfully resumed agent can't trigger a phantom
+    /// relaunch later.
+    private func armResumeRecovery(for session: TerminalSession, settings: AppSettings) {
+        var resumeRetriesRemaining = 2
+        session.onProcessExit = { [weak self, weak session] exitCode, ranFor in
+            guard let self, let session else { return }
+            let disarm = { session.onProcessExit = nil }
+            guard ranFor < 15, (exitCode ?? 0) != 0 else { return disarm() }
+            if let sid = session.agentSessionID,
+               MCPService.claudeSessionFileExists(sessionID: sid, workingDirectory: self.projectRoot) {
+                // The conversation is real, so this id must never be replaced.
+                // The "already in use" rejection lands within a couple of
+                // seconds of launch; anything slower is the user quitting a
+                // *successful* resume (Ctrl-C, declining claude's own trust
+                // prompt) and must be left alone. Past the bounded retries, the
+                // exited overlay's Restart re-runs the same resume manually.
+                guard ranFor < 3, resumeRetriesRemaining > 0 else { return disarm() }
+                resumeRetriesRemaining -= 1
+                Task { @MainActor [weak session] in
+                    try? await Task.sleep(for: .seconds(4))
+                    guard let session, !session.isRunning else { return }
+                    session.relaunch(notice: "Previous \(settings.agentName) instance is still closing — retrying…")
+                }
+                return
+            }
+            disarm()
+            let fresh = UUID().uuidString
+            guard let command = MCPService.launchCommand(settings: settings, sessionID: fresh) else { return }
+            MCPService.bindAgent(to: self, settings: settings)
+            session.relaunch(
+                notice: "Previous \(settings.agentName) session not found — starting a new session.",
+                command: command,
+                agentSessionID: fresh
+            )
+            // agentSessionID is not observed, so persist explicitly to record
+            // the new id for the next restore.
+            self.persistLayoutState()
+        }
     }
 
     // MARK: - Menu actions (operate on the active pane / document)
@@ -947,10 +1164,44 @@ final class Workspace {
     }
 
     /// Reveals the terminal dock and launches the configured agent in a fresh
-    /// terminal tab, rooted at the workspace.
-    func runAgent(command: String, name: String) {
-        terminal.newSession(command: command, title: name)
+    /// terminal tab, rooted at the workspace. `sessionID` is the Claude session
+    /// UUID the command was built with (via `--session-id`), stored on the tab so
+    /// window-layout restoration can resume the conversation later.
+    func runAgent(command: String, name: String, sessionID: String? = nil) {
+        terminal.newSession(command: command, title: name, role: .agent, agentSessionID: sessionID)
         terminal.isVisible = true
+    }
+
+    /// Launches the configured agent in a new terminal tab: binds MCP and, for
+    /// Claude, pins a fresh session UUID so a later window restore can resume
+    /// the conversation. The single entry point for a user-initiated launch, so
+    /// every route (toolbar, menu bar, intents) behaves identically — a route
+    /// that skipped the UUID would create a conversation restore can never
+    /// bring back.
+    func launchConfiguredAgent(settings: AppSettings) {
+        let sessionID = settings.agentKind == .claude ? UUID().uuidString : nil
+        guard let command = MCPService.launchCommand(settings: settings, sessionID: sessionID) else { return }
+        MCPService.bindAgent(to: self, settings: settings)
+        runAgent(command: command, name: settings.agentName, sessionID: sessionID)
+    }
+
+    /// Restarts an exited terminal tab in its own view. A Claude agent tab
+    /// can't just re-run its original command (see
+    /// `MCPService.agentRelaunchCommand` for the resume-vs-re-pin rule), and an
+    /// agent tab is re-bound first so a changed MCP port since the original
+    /// launch doesn't leave the relaunched agent reading a stale project config.
+    func restartTerminalSession(_ session: TerminalSession, settings: AppSettings, shellOverride: String?) {
+        if session.role == .agent {
+            MCPService.bindAgent(to: self, settings: settings)
+            if settings.agentKind == .claude, let sid = session.agentSessionID,
+               let (command, _) = MCPService.agentRelaunchCommand(
+                   settings: settings, sessionID: sid, workingDirectory: projectRoot
+               ) {
+                session.restart(shellOverride: shellOverride, command: command)
+                return
+            }
+        }
+        session.restart(shellOverride: shellOverride)
     }
 
     // MARK: - Unsaved changes
@@ -973,6 +1224,10 @@ final class Workspace {
     /// over: either presenting a save sheet that will call `proceed()` once the
     /// user resolves it, or (re-entrantly) declining to prompt twice.
     func requestWindowClose(proceed: @escaping () -> Void) -> Bool {
+        // Flush the layout now: persistence is otherwise edge-triggered, so a
+        // change still inside PaneLayoutBridge's debounce (or made before the
+        // restore gate opened) would be lost with the window.
+        persistLayoutState()
         let dirty = dirtyDocuments
         guard !dirty.isEmpty else { return true }
         guard !isPresentingCloseSheet, let window = window ?? NSApp.keyWindow else { return false }
@@ -994,6 +1249,7 @@ final class Workspace {
     /// is quitting. Returns `true` if the app may proceed to quit this window
     /// (saved or discarded), `false` if the user cancelled or a save failed.
     func confirmCloseForQuit() async -> Bool {
+        persistLayoutState()
         let dirty = dirtyDocuments
         guard !dirty.isEmpty else { return true }
         guard let window = window ?? NSApp.keyWindow else { return true }

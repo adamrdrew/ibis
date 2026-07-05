@@ -12,6 +12,15 @@ struct EditorAreaView: View {
             ForEach(layout.panes) { pane in
                 EditorPaneView(workspace: workspace, pane: pane, layout: layout, configuration: configuration, onCloseTab: onCloseTab)
                     .frame(minWidth: 240)
+                    // Persist/restore the split's pane widths. Inside a pane
+                    // (not on the HSplitView) so the bridge can find the
+                    // backing NSSplitView among its ancestors; one instance
+                    // is enough, so only the first pane carries it.
+                    .background {
+                        if pane.id == layout.panes.first?.id {
+                            PaneLayoutBridge(workspace: workspace)
+                        }
+                    }
             }
         }
     }

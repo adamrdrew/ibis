@@ -95,10 +95,10 @@ final class AppSettings {
     var lineSpacing: Double = 2
     var showInvisibles: Bool = false
 
-    private let defaults = UserDefaults.standard
+    private var defaults: UserDefaults { IbisDefaults.store }
 
     init() {
-        let defaults = UserDefaults.standard
+        let defaults = IbisDefaults.store
         // `didSet` doesn't fire for these initial assignments, so nothing is
         // written back during load.
         fontName = defaults.string(forKey: Key.fontName) ?? "SF Mono"

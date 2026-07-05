@@ -216,6 +216,102 @@ import AppKit
         #expect(exitCallbacks == 1)
     }
 
+    @Test func processExitReportsCodeAndDurationForAQuickFailure() async throws {
+        // Mimics `claude --resume <missing>` failing fast: window restore relies on
+        // onProcessExit reporting a nonzero code and a short duration to recover.
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 1",
+            title: "Claude",
+            role: .agent
+        )
+        var reportedCode: Int32?
+        var reportedRanFor = TimeInterval.infinity
+        var fired = false
+        session.onProcessExit = { code, ranFor in
+            reportedCode = code; reportedRanFor = ranFor; fired = true
+        }
+        _ = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            shellOverride: "/bin/sh"
+        )
+        let exited = await TestSupport.waitUntil(timeout: 15) { fired }
+        #expect(exited, "expected onProcessExit to fire on exit")
+        #expect((reportedCode ?? 0) != 0) // nonzero → the resume failed
+        #expect(reportedRanFor < 15)      // and it failed quickly
+    }
+
+    @Test func relaunchRetargetsToAFreshSession() async throws {
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 1",
+            title: "Claude",
+            role: .agent,
+            agentSessionID: "OLD"
+        )
+        _ = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            shellOverride: "/bin/sh"
+        )
+        _ = await TestSupport.waitUntil(timeout: 15) { session.hasStarted && !session.isRunning }
+
+        session.relaunch(notice: "starting a new session", command: "sleep 30", agentSessionID: "NEW")
+        #expect(session.agentSessionID == "NEW")
+        #expect(session.command == "sleep 30")
+        let running = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
+        #expect(running, "relaunch should start the fresh command in the same view")
+        session.terminate()
+    }
+
+    @Test func restartCanReplaceTheCommand() async throws {
+        // An exited Claude agent tab restarts via `--resume <sid>` — re-running
+        // the original `--session-id` launch is rejected ("already in use") once
+        // the session exists — so restart must accept a replacement command.
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 1",
+            title: "Claude",
+            role: .agent,
+            agentSessionID: "SID"
+        )
+        _ = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            shellOverride: "/bin/sh"
+        )
+        _ = await TestSupport.waitUntil(timeout: 15) { session.hasStarted && !session.isRunning }
+
+        session.restart(shellOverride: "/bin/sh", command: "sleep 30")
+        #expect(session.command == "sleep 30")
+        let running = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
+        #expect(running, "restart should start the replacement command in the same view")
+        session.terminate()
+    }
+
+    @Test func relaunchWithoutArgumentsRetriesTheSameCommand() async throws {
+        // A resume rejected because the previous window's agent was still
+        // closing ("already in use") is retried verbatim in the same tab.
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 7",
+            title: "Claude",
+            role: .agent,
+            agentSessionID: "SID"
+        )
+        var exits = 0
+        session.onProcessExit = { _, _ in exits += 1 }
+        _ = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            shellOverride: "/bin/sh"
+        )
+        _ = await TestSupport.waitUntil(timeout: 15) { exits == 1 }
+
+        session.relaunch(notice: "retrying")
+        #expect(session.command == "exit 7")     // unchanged — same resume command
+        #expect(session.agentSessionID == "SID") // pointer untouched on a plain retry
+        let reran = await TestSupport.waitUntil(timeout: 15) { exits == 2 }
+        #expect(reran, "relaunch should run the command again in the same view")
+    }
+
     @Test func interactiveShellStartsAndTerminates() async throws {
         let session = TerminalSession(workingDirectory: URL.temporaryDirectory)
         _ = session.makeTerminalView(

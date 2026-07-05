@@ -9,11 +9,11 @@ enum MCPTokenStore {
 
     static func token(for root: URL) -> String {
         let path = canonicalPath(root)
-        var map = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+        var map = IbisDefaults.store.dictionary(forKey: key) as? [String: String] ?? [:]
         if let existing = map[path] { return existing }
         let token = AppSettings.freshToken()
         map[path] = token
-        UserDefaults.standard.set(map, forKey: key)
+        IbisDefaults.store.set(map, forKey: key)
         return token
     }
 

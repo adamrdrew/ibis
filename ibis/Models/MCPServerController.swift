@@ -218,12 +218,91 @@ enum MCPService {
     /// The shell command to launch the configured agent, augmented with the Ibis
     /// orientation when we know how to inject it (Claude) and MCP is on. Returns
     /// nil if no agent is configured.
-    static func launchCommand(settings: AppSettings) -> String? {
+    ///
+    /// For Claude, `sessionID` pins the conversation to a stable UUID so window
+    /// restoration can bring it back: `--session-id` on a fresh launch
+    /// (`resume == false`), `--resume` on restore. The system prompt is applied
+    /// in both cases — `--append-system-prompt` is per-invocation (Claude does
+    /// not store it in the session), so a resumed conversation needs it
+    /// re-injected just like a fresh one.
+    static func launchCommand(settings: AppSettings, sessionID: String? = nil, resume: Bool = false) -> String? {
         guard let base = settings.agentCommandLine else { return nil }
-        guard settings.mcpEnabled, settings.agentKind == .claude,
-              settings.agentInjectSystemPrompt else { return base }
-        let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
-        return base + " --append-system-prompt '" + prompt + "'"
+        guard settings.agentKind == .claude else { return base }
+        // The id is interpolated into a `shell -l -c` string, so accept nothing
+        // but a well-formed UUID: on the restore path it comes from persisted
+        // UserDefaults, and a corrupted or tampered value must not reach the
+        // shell. A rejected id degrades to an unpinned fresh launch.
+        let sessionID = sessionID.flatMap { UUID(uuidString: $0) != nil ? $0 : nil }
+
+        var command = base
+        if let sessionID {
+            command += (resume ? " --resume " : " --session-id ") + sessionID
+        }
+        if settings.mcpEnabled, settings.agentInjectSystemPrompt {
+            let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
+            command += " --append-system-prompt '" + prompt + "'"
+        }
+        return command
+    }
+
+    /// The command to relaunch an agent tab that owns `sessionID`: `--resume`
+    /// when the conversation exists on disk, else re-pinned to the same
+    /// `--session-id` (resuming a transcript-less session fails with "No
+    /// conversation found", while re-pinning an existing one fails with
+    /// "already in use" — this picks whichever works). The single home of that
+    /// rule, shared by window restore and the exited-overlay Restart.
+    static func agentRelaunchCommand(
+        settings: AppSettings, sessionID: String, workingDirectory: URL
+    ) -> (command: String, resume: Bool)? {
+        let resume = claudeSessionFileExists(sessionID: sessionID, workingDirectory: workingDirectory)
+        guard let command = launchCommand(settings: settings, sessionID: sessionID, resume: resume) else { return nil }
+        return (command, resume)
+    }
+
+    /// Whether Claude Code has a transcript on disk for `sessionID`
+    /// (`~/.claude/projects/<dir>/<id>.jsonl`). Claude creates the file lazily
+    /// on the first message, so a launched-but-never-used session has none:
+    /// `--resume` on it fails ("No conversation found"), while relaunching
+    /// pinned to the same `--session-id` works. This check picks between those,
+    /// and stops recovery from ever replacing a session ID whose conversation
+    /// still exists.
+    ///
+    /// Checks the slug-named directory first, then falls back to scanning every
+    /// project directory: Claude's real directory name can diverge from our
+    /// slug (it truncates + hashes long paths, and its naming rule is an
+    /// undocumented internal that can change), and session UUIDs are unique, so
+    /// a transcript found anywhere means the conversation exists.
+    static func claudeSessionFileExists(sessionID: String, workingDirectory: URL) -> Bool {
+        let projects = FileManager.default.homeDirectoryForCurrentUser
+            .appending(components: ".claude", "projects")
+        let transcript = sessionID + ".jsonl"
+        let slugged = projects
+            .appending(components: claudeProjectSlug(for: workingDirectory), transcript)
+        if FileManager.default.fileExists(atPath: slugged.path(percentEncoded: false)) { return true }
+        guard let dirs = try? FileManager.default.contentsOfDirectory(
+            at: projects, includingPropertiesForKeys: nil
+        ) else { return false }
+        return dirs.contains {
+            FileManager.default.fileExists(atPath: $0.appending(component: transcript).path(percentEncoded: false))
+        }
+    }
+
+    /// Claude Code's per-project directory name: the cwd path with every
+    /// character outside `[a-zA-Z0-9]` replaced by "-". Claude applies that
+    /// replacement per UTF-16 code unit (a JavaScript regex without the `u`
+    /// flag), so a non-BMP character like an emoji becomes *two* dashes —
+    /// mapping `utf16` here, not scalars, mirrors that. Claude also truncates
+    /// and hash-suffixes very long slugs, which this deliberately does not
+    /// replicate: `claudeSessionFileExists` falls back to a directory scan.
+    static func claudeProjectSlug(for workingDirectory: URL) -> String {
+        let path = workingDirectory.path(percentEncoded: false).strippingTrailingSlashes
+        let mapped = path.utf16.map { unit -> Character in
+            switch unit {
+            case 0x30...0x39, 0x41...0x5A, 0x61...0x7A: Character(UnicodeScalar(unit)!)
+            default: "-"
+            }
+        }
+        return String(mapped)
     }
 
     /// Before launching an agent into a project, write that project's MCP config

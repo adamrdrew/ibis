@@ -2,12 +2,12 @@ import Testing
 import Foundation
 @testable import ibis
 
-// Serialized: shared process-wide UserDefaults key (tests run in parallel by default).
+// @MainActor so the test closures inherit the isolation the store requires;
+// each test runs against its own throwaway defaults suite (withIsolatedDefaults).
+@MainActor
 @Suite(.serialized) struct MCPTokenStoreTests {
-    private static let defaultsKey = "mcp.projectTokens.v1"
-
-    @Test func tokenIsStableForTheSameRoot() {
-        TestSupport.withPreservedDefault(Self.defaultsKey) {
+    @Test func tokenIsStableForTheSameRoot() async {
+        await TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/mcp-\(UUID().uuidString)")
             let first = MCPTokenStore.token(for: root)
             let second = MCPTokenStore.token(for: root)
@@ -16,8 +16,8 @@ import Foundation
         }
     }
 
-    @Test func trailingSlashResolvesToTheSameToken() {
-        TestSupport.withPreservedDefault(Self.defaultsKey) {
+    @Test func trailingSlashResolvesToTheSameToken() async {
+        await TestSupport.withIsolatedDefaults {
             let path = "/tmp/mcp-\(UUID().uuidString)"
             let a = MCPTokenStore.token(for: URL(filePath: path))
             let b = MCPTokenStore.token(for: URL(filePath: path + "/"))
@@ -25,8 +25,8 @@ import Foundation
         }
     }
 
-    @Test func distinctRootsGetDistinctTokens() {
-        TestSupport.withPreservedDefault(Self.defaultsKey) {
+    @Test func distinctRootsGetDistinctTokens() async {
+        await TestSupport.withIsolatedDefaults {
             let a = MCPTokenStore.token(for: URL(filePath: "/tmp/mcp-a-\(UUID().uuidString)"))
             let b = MCPTokenStore.token(for: URL(filePath: "/tmp/mcp-b-\(UUID().uuidString)"))
             #expect(a != b)

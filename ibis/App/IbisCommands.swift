@@ -258,9 +258,9 @@ struct IbisCommands: Commands {
     // MARK: - Helpers
 
     private func runAgent() {
-        guard let workspace, let command = MCPService.launchCommand(settings: settings) else { return }
-        MCPService.bindAgent(to: workspace, settings: settings)
-        workspace.runAgent(command: command, name: settings.agentName)
+        // Same path as the toolbar button, so a menu-launched Claude gets the
+        // same session pinning (and is restorable) as any other launch.
+        workspace?.launchConfiguredAgent(settings: settings)
     }
 
     /// Shares the active document's file, anchoring the picker to the top of the

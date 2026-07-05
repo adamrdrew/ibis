@@ -1,8 +1,9 @@
 import Foundation
+@testable import ibis
 
-/// Shared helpers for the unit tests: throwaway temp directories and
-/// snapshot/restore of `UserDefaults` keys so persistence tests don't leave
-/// state behind on the developer's machine.
+/// Shared helpers for the unit tests: throwaway temp directories and an isolated
+/// `UserDefaults` so persistence tests never touch the developer's real
+/// preferences.
 enum TestSupport {
     /// Creates a unique, empty temp directory. Caller is responsible for cleanup
     /// (use `withTempDir` to get automatic removal).
@@ -26,39 +27,45 @@ enum TestSupport {
         return try await body(dir)
     }
 
-    /// Snapshots a `UserDefaults` key, runs `body`, then restores the key's prior
-    /// value (or removes it if it didn't exist), so persistence tests stay
-    /// hermetic and can't pollute the standard suite.
-    static func withPreservedDefault<T>(_ key: String, _ body: () throws -> T) rethrows -> T {
-        try withPreservedDefaults([key], body)
+    /// Runs `body` with every Ibis store (`WorkspaceStateStore`, `AppSettings`,
+    /// `WorkspaceTrust`, `MCPTokenStore`, …) bound to a fresh, empty
+    /// `UserDefaults` suite that is discarded afterward — so persistence tests
+    /// can never read or mutate the developer's real preferences, no matter how
+    /// the run ends. Isolation is via a task-local (`IbisDefaults.override`), so
+    /// each test's suite is scoped to its own async call tree: no shared global,
+    /// so no cross-suite races and no lock to deadlock on.
+    static func withIsolatedDefaults<T>(_ body: () async throws -> T) async rethrows -> T {
+        let name = makeSuiteName()
+        let suite = UserDefaults(suiteName: name)!
+        defer { teardownSuite(suite, name) }
+        return try await IbisDefaults.$override.withValue(DefaultsBox(suite)) {
+            try await body()
+        }
     }
 
-    /// Multi-key variant of `withPreservedDefault`.
-    static func withPreservedDefaults<T>(_ keys: [String], _ body: () throws -> T) rethrows -> T {
-        let priors = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        defer {
-            for (key, prior) in priors {
-                if let prior { UserDefaults.standard.set(prior, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
-            }
-        }
-        // Start from a clean slate so leftover state can't mask a bug.
-        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
-        return try body()
+    /// Synchronous variant of `withIsolatedDefaults`.
+    static func withIsolatedDefaults<T>(_ body: () throws -> T) rethrows -> T {
+        let name = makeSuiteName()
+        let suite = UserDefaults(suiteName: name)!
+        defer { teardownSuite(suite, name) }
+        return try IbisDefaults.$override.withValue(DefaultsBox(suite), operation: body)
     }
 
-    /// Async variant of `withPreservedDefaults`, for suites that await while
-    /// holding the preserved keys.
-    static func withPreservedDefaults<T>(_ keys: [String], _ body: () async throws -> T) async rethrows -> T {
-        let priors = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
-        defer {
-            for (key, prior) in priors {
-                if let prior { UserDefaults.standard.set(prior, forKey: key) }
-                else { UserDefaults.standard.removeObject(forKey: key) }
-            }
-        }
-        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
-        return try await body()
+    private static func makeSuiteName() -> String { "ibisTests-\(UUID().uuidString)" }
+
+    /// Clears the suite and deletes its backing plist — `removePersistentDomain`
+    /// alone leaves an empty file in ~/Library/Preferences, which would pile up
+    /// one-per-test across runs.
+    private static func teardownSuite(_ suite: UserDefaults, _ name: String) {
+        suite.removePersistentDomain(forName: name)
+        // Flush the emptied domain to disk before deleting the file, else
+        // cfprefsd rewrites an empty plist back after our removal (they'd
+        // otherwise accumulate one-per-test across runs).
+        suite.synchronize()
+        let plist = FileManager.default.homeDirectoryForCurrentUser
+            .appending(components: "Library", "Preferences", name)
+            .appendingPathExtension("plist")
+        try? FileManager.default.removeItem(at: plist)
     }
 
     /// Polls `condition` on the main actor until it's true or `timeout` seconds

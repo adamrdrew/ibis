@@ -6,17 +6,8 @@ import Foundation
 /// snapshots the keys it may touch. Serialized: process-wide defaults.
 @MainActor
 @Suite(.serialized) struct AppSettingsTests {
-    private static let settingsKeys = [
-        "editor.fontName", "editor.fontSize", "editor.tabWidth", "editor.usesSoftTabs",
-        "editor.showLineNumbers", "editor.wordWrap", "editor.lightTheme", "editor.darkTheme",
-        "terminal.fontName", "terminal.fontSize", "terminal.shellPath",
-        "terminal.dockHeight", "terminal.dockWidth", "terminal.placement",
-        "agent.name", "agent.command", "agent.args", "agent.kind",
-        "mcp.enabled", "mcp.port", "mcp.token",
-    ]
-
-    @Test func freshDefaultsProduceSaneSettings() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func freshDefaultsProduceSaneSettings() async {
+        await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             #expect(settings.fontName == "SF Mono")
             #expect(settings.fontSize == 13)
@@ -32,8 +23,8 @@ import Foundation
         }
     }
 
-    @Test func changesPersistAcrossInstances() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func changesPersistAcrossInstances() async {
+        await TestSupport.withIsolatedDefaults {
             let first = AppSettings()
             first.fontSize = 15
             first.terminalPlacement = .trailing
@@ -46,8 +37,8 @@ import Foundation
         }
     }
 
-    @Test func mcpTokenIsGeneratedOnceAndRoundTrips() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func mcpTokenIsGeneratedOnceAndRoundTrips() async {
+        await TestSupport.withIsolatedDefaults {
             let first = AppSettings()
             let token = first.mcpToken
             #expect(!token.isEmpty)
@@ -65,8 +56,8 @@ import Foundation
         #expect(a.count >= 32) // 24 bytes → 32 base64url chars
     }
 
-    @Test func agentCommandLineComposesCommandAndArgs() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func agentCommandLineComposesCommandAndArgs() async {
+        await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""
@@ -88,16 +79,16 @@ import Foundation
 
     // MARK: MCPService.launchCommand
 
-    @Test func launchCommandIsNilWithoutAnAgent() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func launchCommandIsNilWithoutAnAgent() async {
+        await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = ""
             #expect(MCPService.launchCommand(settings: settings) == nil)
         }
     }
 
-    @Test func launchCommandPassesThroughWhenMCPIsOff() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func launchCommandPassesThroughWhenMCPIsOff() async {
+        await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.mcpEnabled = false
@@ -105,8 +96,8 @@ import Foundation
         }
     }
 
-    @Test func launchCommandPassesThroughForNonClaudeAgents() {
-        TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func launchCommandPassesThroughForNonClaudeAgents() async {
+        await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "codex"
             settings.agentKind = .codex
@@ -115,8 +106,8 @@ import Foundation
         }
     }
 
-    @Test func launchCommandInjectsOrientationForClaudeWithMCP() throws {
-        try TestSupport.withPreservedDefaults(Self.settingsKeys) {
+    @Test func launchCommandInjectsOrientationForClaudeWithMCP() async throws {
+        try await TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentKind = .claude

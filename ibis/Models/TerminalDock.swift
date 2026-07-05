@@ -30,6 +30,18 @@ final class TerminalDock {
         sessions.first { $0.role == .run }
     }
 
+    /// The sessions included in a persisted snapshot: every tab except the
+    /// reusable `.run` action tab. The layout fingerprint and the snapshot both
+    /// derive from this, so they can never disagree on what counts.
+    var persistableSessions: [TerminalSession] {
+        sessions.filter { $0.role != .run }
+    }
+
+    /// Index into `persistableSessions` of the active tab (-1 for none).
+    var activePersistableIndex: Int {
+        persistableSessions.firstIndex { $0.id == activeSessionID } ?? -1
+    }
+
     /// Whether a project action is currently running. Stored (not derived from
     /// the session) so the toolbar reliably observes it — SwiftUI toolbars don't
     /// track a value read through nested computed properties across objects.
@@ -43,17 +55,26 @@ final class TerminalDock {
 
     /// Creates a new terminal tab rooted at the workspace and focuses it. Pass a
     /// `command` (and `title`) to run something specific, e.g. an agent.
+    /// `takeFocus` is false when restoring several tabs at window open, so they
+    /// don't fight each other (and the editor) for first responder.
     @discardableResult
-    func newSession(command: String? = nil, title: String? = nil, role: TerminalSession.Role = .shell) -> TerminalSession {
+    func newSession(
+        command: String? = nil,
+        title: String? = nil,
+        role: TerminalSession.Role = .shell,
+        agentSessionID: String? = nil,
+        takeFocus: Bool = true
+    ) -> TerminalSession {
         let session = TerminalSession(
             workingDirectory: workingDirectory,
             command: command,
             title: title,
             role: role,
+            agentSessionID: agentSessionID,
             extraEnvironment: projectEnv
         )
         // Give the freshly opened terminal/agent tab keyboard focus once built.
-        session.wantsFocus = true
+        if takeFocus { session.wantsFocus = true }
         sessions.append(session)
         activeSessionID = session.id
         return session

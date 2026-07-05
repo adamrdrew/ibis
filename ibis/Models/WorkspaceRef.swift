@@ -27,9 +27,8 @@ struct WorkspaceRef: Codable, Hashable, Identifiable {
     }
 
     static func canonical(_ path: String) -> String {
-        var resolved = URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
-        if resolved.count > 1, resolved.hasSuffix("/") { resolved.removeLast() }
-        return resolved
+        URL(filePath: path).resolvingSymlinksInPath().standardizedFileURL
+            .path(percentEncoded: false).strippingTrailingSlashes
     }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }

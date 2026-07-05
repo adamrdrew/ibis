@@ -261,10 +261,10 @@ struct WorkspaceView: View {
             MCPBridge.shared.register(workspace)
             await workspace.rootNode.loadChildren()
             workspace.refreshRootEmptiness()
-            if ref.isDirectory {
-                // Reopen the tabs/panes/selection from the last session.
-                await workspace.restorePersistedLayout()
-            } else {
+            // Reopen the tabs/panes/selection and terminal dock from the last
+            // session, then open the persistence gate (both inside).
+            await workspace.restoreSession(settings: settings)
+            if !ref.isDirectory {
                 selection = workspace.rootNode.id
             }
             // Honor an "Open in Agent" request (one-shot; restored windows never
@@ -430,9 +430,7 @@ struct WorkspaceView: View {
     }
 
     private func launchAgent(in workspace: Workspace) {
-        guard let command = MCPService.launchCommand(settings: settings) else { return }
-        MCPService.bindAgent(to: workspace, settings: settings)
-        workspace.runAgent(command: command, name: settings.agentName)
+        workspace.launchConfiguredAgent(settings: settings)
     }
 
     /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
@@ -539,7 +537,7 @@ struct WorkspaceView: View {
     // collapses the space, the inner frame keeps the terminal sized) so
     // SwiftTerm views are never detached — detaching resets their scrollback.
     private func dock(_ workspace: Workspace) -> some View {
-        TerminalDockView(dock: workspace.terminal)
+        TerminalDockView(workspace: workspace, dock: workspace.terminal)
     }
 
     private func openSearchResult(_ url: URL, _ range: NSRange) {

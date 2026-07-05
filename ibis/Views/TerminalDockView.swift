@@ -4,6 +4,7 @@ import AppKit
 /// The bottom terminal dock: a header (tab strip + new/hide controls) aligned to
 /// the shared chrome height, then the active terminal session's view.
 struct TerminalDockView: View {
+    let workspace: Workspace
     @Bindable var dock: TerminalDock
     @Environment(AppSettings.self) private var settings
 
@@ -92,7 +93,9 @@ struct TerminalDockView: View {
                 TerminalExitedOverlay(
                     session: session,
                     isActive: isActive,
-                    onRestart: { session.restart(shellOverride: shellOverride) }
+                    onRestart: {
+                        workspace.restartTerminalSession(session, settings: settings, shellOverride: shellOverride)
+                    }
                 )
             }
         }
