@@ -30,14 +30,14 @@ enum MCPTokenStore {
 /// A thread-safe snapshot of the tokens the server should accept, readable from
 /// the transport's synchronous, non-main `authorizationHandler`. Kept in sync by
 /// `MCPBridge` (on the main actor) as windows open and close.
-final class MCPTokenRegistry: @unchecked Sendable {
+nonisolated final class MCPTokenRegistry: @unchecked Sendable {
     static let shared = MCPTokenRegistry()
     private init() {}
 
     private let lock = OSAllocatedUnfairLock(initialState: Set<String>())
 
     func insert(_ token: String) {
-        lock.withLock { $0.insert(token) }
+        lock.withLock { _ = $0.insert(token) }
     }
 
     func remove(_ token: String) {

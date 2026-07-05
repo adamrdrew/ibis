@@ -3,7 +3,7 @@ import Foundation
 /// Writes (or merges) the Ibis MCP server entry into the current project's
 /// config file, in the format expected by the user's chosen agent. All agents
 /// point at the same Streamable HTTP endpoint (`/mcp`) with a bearer token.
-enum MCPConfigWriter {
+nonisolated enum MCPConfigWriter {
     struct Result {
         let path: URL
         let message: String

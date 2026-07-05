@@ -104,7 +104,7 @@ actor SyntaxHighlighter {
 
 extension NSColor {
     /// sRGB components, falling back gracefully for colors that can't convert.
-    var rgbaComponents: RGBAColor {
+    nonisolated var rgbaComponents: RGBAColor {
         let converted = usingColorSpace(.sRGB) ?? self
         return RGBAColor(
             red: Double(converted.redComponent),

@@ -10,7 +10,7 @@ struct FileEntry: Sendable {
 /// Reads directory contents for the file tree. Hidden dotfiles (like
 /// `.gitignore`, `.env`) are shown — developers want them — but noise like
 /// `.DS_Store` and the `.git` directory are hidden.
-enum FileTreeLoader {
+nonisolated enum FileTreeLoader {
     static let ignoredNames: Set<String> = [".DS_Store", ".git"]
 
     nonisolated static func contents(of directory: URL) -> [FileEntry] {

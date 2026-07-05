@@ -49,7 +49,7 @@ final class ProjectSearchModel {
                 isCancelled: { Task.isCancelled }
             )
             if Task.isCancelled { return }
-            await MainActor.run {
+            await MainActor.run { [weak self] in
                 guard let self, self.query == query, self.caseSensitive == caseSensitive,
                       self.useRegex == useRegex, self.wholeWord == wholeWord else { return }
                 self.results = outcome.files

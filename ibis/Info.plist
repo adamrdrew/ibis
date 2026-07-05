@@ -52,6 +52,22 @@
 			<string>None</string>
 		</dict>
 	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<!-- App-internal drag payload for reordering editor tabs. Declaring a
+			     dedicated type keeps a tab dropped on the code editor or terminal
+			     from being accepted as plain text. See TabBarView. -->
+			<key>UTTypeIdentifier</key>
+			<string>com.adamdrew.ibis.editor-tab</string>
+			<key>UTTypeDescription</key>
+			<string>Ibis Editor Tab</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+	</array>
 	<key>NSServices</key>
 	<array>
 		<dict>

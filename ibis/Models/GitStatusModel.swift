@@ -9,7 +9,7 @@ import os
 @Observable
 @MainActor
 final class GitStatusModel {
-    struct Info: Equatable {
+    nonisolated struct Info: Equatable {
         var isRepository = false
         var branch: String?
         var head: String?
@@ -146,7 +146,7 @@ final class GitStatusModel {
 
 private extension Substring {
     /// Returns the remainder after `prefix`, or nil if the string doesn't start with it.
-    func dropPrefix(_ prefix: String) -> Substring? {
+    nonisolated func dropPrefix(_ prefix: String) -> Substring? {
         hasPrefix(prefix) ? dropFirst(prefix.count) : nil
     }
 }

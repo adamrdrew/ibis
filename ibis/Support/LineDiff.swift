@@ -1,7 +1,7 @@
 import Foundation
 
 /// One line in a rendered unified diff.
-struct DiffLine: Identifiable, Equatable {
+nonisolated struct DiffLine: Identifiable, Equatable {
     enum Kind: Equatable { case context, added, removed }
     let id = UUID()
     let kind: Kind
@@ -9,7 +9,7 @@ struct DiffLine: Identifiable, Equatable {
 }
 
 /// A pending agent-proposed edit awaiting the human's review.
-struct DiffProposal: Identifiable, Equatable {
+nonisolated struct DiffProposal: Identifiable, Equatable {
     let id = UUID()
     let fileURL: URL
     let displayName: String
@@ -22,7 +22,7 @@ struct DiffProposal: Identifiable, Equatable {
 
 /// Line-level diff via `CollectionDifference`. Unchanged lines (the LCS) become
 /// context; the rest are emitted as removed (old) / added (new) in order.
-enum LineDiff {
+nonisolated enum LineDiff {
     static func compute(old: String, new: String) -> [DiffLine] {
         let oldLines = old.components(separatedBy: "\n")
         let newLines = new.components(separatedBy: "\n")
