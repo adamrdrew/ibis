@@ -54,8 +54,10 @@ struct FileOutlineView: NSViewRepresentable {
         scrollView.drawsBackground = false
         scrollView.borderType = .noBorder
 
+        #if compiler(>=6.4)
         // Annotate rows with their file entity so the system offers "Ask Siri".
         outlineView.appIntentsDataSource = context.coordinator
+        #endif
 
         outlineView.coordinator = context.coordinator
         context.coordinator.outlineView = outlineView
@@ -75,7 +77,7 @@ struct FileOutlineView: NSViewRepresentable {
     // MARK: - Coordinator
 
     @MainActor
-    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate, NSMenuDelegate, NSTableViewAppIntentsDataSource, NSMenuItemValidation {
+    final class Coordinator: NSObject, NSOutlineViewDataSource, NSOutlineViewDelegate, NSTextFieldDelegate, NSMenuDelegate, NSMenuItemValidation {
         private let workspace: Workspace
         private let selection: Binding<FileNode.ID?>
         weak var outlineView: TreeOutlineView?
@@ -219,14 +221,6 @@ struct FileOutlineView: NSViewRepresentable {
 
         func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
             (item as? FileNode)?.isDirectory ?? false
-        }
-
-        // MARK: App Intents entity annotation (drives the "Ask Siri" item)
-
-        func outlineView(_ outlineView: NSOutlineView, appEntityIdentifierFor item: Any?) -> EntityIdentifier? {
-            guard let node = item as? FileNode, !node.isDirectory,
-                  let fileID = try? FileEntityIdentifier.file(url: node.url) else { return nil }
-            return EntityIdentifier(for: WorkspaceFileEntity.self, identifier: fileID)
         }
 
         // MARK: Delegate — cells & selection
@@ -791,3 +785,19 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
         return wrote
     }
 }
+
+// MARK: - App Intents entity annotation (drives the "Ask Siri" item)
+
+#if compiler(>=6.4)
+// `NSTableViewAppIntentsDataSource` exists only in the macOS 27 SDK (Xcode 27,
+// Swift 6.4) — earlier SDKs lack the type entirely, so when building with
+// Xcode 26 the "Ask Siri" row annotation compiles away. The item is macOS
+// 27-gated at runtime anyway, so nothing is lost on macOS 26.
+extension FileOutlineView.Coordinator: NSTableViewAppIntentsDataSource {
+    func outlineView(_ outlineView: NSOutlineView, appEntityIdentifierFor item: Any?) -> EntityIdentifier? {
+        guard let node = item as? FileNode, !node.isDirectory,
+              let fileID = try? FileEntityIdentifier.file(url: node.url) else { return nil }
+        return EntityIdentifier(for: WorkspaceFileEntity.self, identifier: fileID)
+    }
+}
+#endif

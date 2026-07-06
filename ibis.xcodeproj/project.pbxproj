@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		669F84812FF8458300A2051F /* PrototypeExtensionsLib in Frameworks */ = {isa = PBXBuildFile; productRef = 669F84802FF8458300A2051F /* PrototypeExtensionsLib */; };
-		669F84832FF8458300A2051F /* PrototypeServerLib in Frameworks */ = {isa = PBXBuildFile; productRef = 669F84822FF8458300A2051F /* PrototypeServerLib */; };
 		669F84852FF8458300A2051F /* SwiftMCP in Frameworks */ = {isa = PBXBuildFile; productRef = 669F84842FF8458300A2051F /* SwiftMCP */; };
 		66ACBD552FF71B51008F6F54 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 66ACBD542FF71B51008F6F54 /* SwiftTerm */; };
 		66BA32152FF5EE25002CA212 /* Highlighter in Frameworks */ = {isa = PBXBuildFile; productRef = 66BA32142FF5EE25002CA212 /* Highlighter */; };
@@ -59,9 +57,7 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
-				669F84812FF8458300A2051F /* PrototypeExtensionsLib in Frameworks */,
 				66ACBD552FF71B51008F6F54 /* SwiftTerm in Frameworks */,
-				669F84832FF8458300A2051F /* PrototypeServerLib in Frameworks */,
 				66BA32152FF5EE25002CA212 /* Highlighter in Frameworks */,
 				669F84852FF8458300A2051F /* SwiftMCP in Frameworks */,
 			);
@@ -112,8 +108,6 @@
 			packageProductDependencies = (
 				66BA32142FF5EE25002CA212 /* Highlighter */,
 				66ACBD542FF71B51008F6F54 /* SwiftTerm */,
-				669F84802FF8458300A2051F /* PrototypeExtensionsLib */,
-				669F84822FF8458300A2051F /* PrototypeServerLib */,
 				669F84842FF8458300A2051F /* SwiftMCP */,
 			);
 			productName = MyApp;
@@ -173,6 +167,7 @@
 				66BA32132FF5EE25002CA212 /* XCRemoteSwiftPackageReference "HighlighterSwift" */,
 				66ACBD532FF71B51008F6F54 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 				669F847F2FF8458300A2051F /* XCRemoteSwiftPackageReference "SwiftMCP" */,
+				669F84992FF8458300A2051F /* XCRemoteSwiftPackageReference "swift-subprocess" */,
 			);
 			preferredProjectObjectVersion = 90;
 			productRefGroup = 000000000000000000000020 /* Products */;
@@ -277,7 +272,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;
@@ -341,7 +336,7 @@
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MACOSX_DEPLOYMENT_TARGET = 26.6;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PROJECT_UNIQUE_VALUE = TR0I3LPP;
@@ -359,7 +354,7 @@
 				AUTOMATION_APPLE_EVENTS = NO;
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = ibis/ibis.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = P8645Z2MB8;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -414,7 +409,7 @@
 				AUTOMATION_APPLE_EVENTS = NO;
 				"CODE_SIGN_ENTITLEMENTS[sdk=*]" = ibis/ibis.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = P8645Z2MB8;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -541,10 +536,6 @@
 				kind = upToNextMajorVersion;
 				minimumVersion = 1.2.0;
 			};
-			traits = (
-				Server,
-				default,
-			);
 		};
 		66ACBD532FF71B51008F6F54 /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -562,19 +553,17 @@
 				minimumVersion = 3.1.0;
 			};
 		};
+		669F84992FF8458300A2051F /* XCRemoteSwiftPackageReference "swift-subprocess" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-subprocess.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.5.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		669F84802FF8458300A2051F /* PrototypeExtensionsLib */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 669F847F2FF8458300A2051F /* XCRemoteSwiftPackageReference "SwiftMCP" */;
-			productName = PrototypeExtensionsLib;
-		};
-		669F84822FF8458300A2051F /* PrototypeServerLib */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 669F847F2FF8458300A2051F /* XCRemoteSwiftPackageReference "SwiftMCP" */;
-			productName = PrototypeServerLib;
-		};
 		669F84842FF8458300A2051F /* SwiftMCP */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 669F847F2FF8458300A2051F /* XCRemoteSwiftPackageReference "SwiftMCP" */;

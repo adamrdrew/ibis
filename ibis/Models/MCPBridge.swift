@@ -336,8 +336,10 @@ final class MCPBridge {
     }
 }
 
-/// One find-and-replace edit for `propose_patch`.
-struct ProposedEdit: Sendable, Codable {
+/// One find-and-replace edit for `propose_patch`. `nonisolated` so its Codable
+/// conformance stays usable from the nonisolated `@MCPTool`-generated decoding
+/// (under MainActor default isolation the conformance would be isolated).
+nonisolated struct ProposedEdit: Sendable, Codable {
     /// The exact text to find (include enough surrounding context to be unique).
     let oldString: String
     /// The text to replace it with.

@@ -7,7 +7,9 @@ configured agent), and a live Git status bar. Opens from Finder, the `ibis` CLI,
 the Services menu, and Shortcuts/Siri App Intents; confirms unsaved changes on
 close. **No** run/debug, LSP, or plugin marketplace.
 
-- **Platform:** macOS only, deployment target **macOS 27**, SwiftUI + AppKit.
+- **Platform:** macOS only, deployment target **macOS 26.0** (so builds run on
+  Tahoe; macOS 27-only niceties like the "Ask Siri" item degrade gracefully),
+  SwiftUI + AppKit.
 - **Hero color:** kelly green (`Color.ibisKelly`), used sparingly for accents.
 - **Not sandboxed.** The App Sandbox was removed so the integrated terminal can
   spawn a real, useful login shell (a sandboxed child shell is crippled — see the
@@ -187,6 +189,23 @@ disturbed. It can veto the close and re-issue it (via a `proceed` closure /
 `performClose`) once the confirmation resolves. Don't just replace `window.delegate`
 outright — you'll break SwiftUI window handling.
 
+**Building with Xcode 26 (CI) vs the Xcode 27 beta (dev machine).** CI compiles
+with the macOS 26.6 SDK; two things only break there. (1)
+`NSTableViewAppIntentsDataSource` doesn't exist in pre-27 SDKs, so the "Ask
+Siri" wiring in `FileOutlineView` is gated `#if compiler(>=6.4)` (Swift 6.4 ⇔
+Xcode 27) — keep any new 27-SDK-only API behind the same gate. (2) The project
+sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and Xcode 26's compiler
+rejects MainActor-isolated conformances to `Sendable`-constrained protocols
+(Xcode 27's accepts them), so types whose conformances must be nonisolated —
+`IbisMCPServer`, `ProposedEdit`, `WorkspaceFileEntity` — are declared
+`nonisolated`. Do the same for new AppIntents entities or MCP-facing types.
+Extra trap on `IbisMCPServer`: `nonisolated` on the class does NOT reach
+conformances the `@MCPServer` macro emits in an extension (Xcode 26 gives the
+extension MainActor default isolation anyway), so the SwiftMCP conformances
+(`MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding`) are
+written explicitly on the class declaration — the macro then skips emitting
+them. Don't remove them as "redundant".
+
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
 view tree and CALayer tree (class, frame, owner) and pixel-probe. That found the
@@ -201,3 +220,15 @@ culprit immediately when source-reading had a 100% failure rate.
   (`LocalProcessTerminalView`). SPM package; pulls in `swift-argument-parser`.
   Requires the sandbox to be off (see terminal gotcha). `Package.resolved`
   committed.
+- **SwiftMCP** (`import SwiftMCP`, guarded by `#if canImport(SwiftMCP)`) — the
+  MCP server (`MCPServerController` / `IbisMCPServer`) agents connect to.
+  **Gotchas, both of which break `xcodebuild` on CLI/CI while the Xcode IDE
+  builds fine:** (1) SwiftPM's CLI resolver chokes on SwiftMCP 1.9's
+  trait-conditional swift-subprocess dependency ("Missing package product
+  'swift-subprocess_Subprocess.Subprocess'"), so the project pins
+  `swift-subprocess` as a **direct** package dependency (linked to no target) —
+  don't remove it. (2) Don't put a `traits = (...)` attribute on the SwiftMCP
+  package reference: the CLI honors the literal list (dropping default traits
+  like `Client`), and the `@MCPServer` macro then fails on the missing
+  Client-trait `MCPServerProxy` type. Restricting to Server-only traits is a
+  dead end for the same reason.
