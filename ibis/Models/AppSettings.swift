@@ -50,10 +50,9 @@ final class AppSettings {
     var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: Key.terminalFontSize) } }
     /// Optional shell override; empty means use the user's login shell.
     var terminalShellPath: String { didSet { defaults.set(terminalShellPath, forKey: Key.terminalShellPath) } }
-    /// Remembered size of the terminal dock (height when at the bottom, width
-    /// when trailing).
-    var terminalDockHeight: Double { didSet { defaults.set(terminalDockHeight, forKey: Key.terminalDockHeight) } }
-    var terminalDockWidth: Double { didSet { defaults.set(terminalDockWidth, forKey: Key.terminalDockWidth) } }
+    // The terminal dock's size is intentionally *not* stored here: it's per
+    // window (on `TerminalDock`) and persisted per workspace root. A global
+    // setting made every open window resize in lockstep.
     /// Whether the terminal dock sits at the bottom or along the trailing edge.
     var terminalPlacement: TerminalPlacement {
         didSet { defaults.set(terminalPlacement.rawValue, forKey: Key.terminalPlacement) }
@@ -112,8 +111,6 @@ final class AppSettings {
         terminalFontName = defaults.string(forKey: Key.terminalFontName) ?? "SF Mono"
         terminalFontSize = defaults.object(forKey: Key.terminalFontSize) as? Double ?? 13
         terminalShellPath = defaults.string(forKey: Key.terminalShellPath) ?? ""
-        terminalDockHeight = defaults.object(forKey: Key.terminalDockHeight) as? Double ?? 240
-        terminalDockWidth = defaults.object(forKey: Key.terminalDockWidth) as? Double ?? 480
         terminalPlacement = defaults.string(forKey: Key.terminalPlacement)
             .flatMap(TerminalPlacement.init) ?? .bottom
         agentName = defaults.string(forKey: Key.agentName) ?? "Claude"
@@ -160,8 +157,6 @@ final class AppSettings {
         static let terminalFontName = "terminal.fontName"
         static let terminalFontSize = "terminal.fontSize"
         static let terminalShellPath = "terminal.shellPath"
-        static let terminalDockHeight = "terminal.dockHeight"
-        static let terminalDockWidth = "terminal.dockWidth"
         static let terminalPlacement = "terminal.placement"
         static let agentName = "agent.name"
         static let agentCommand = "agent.command"

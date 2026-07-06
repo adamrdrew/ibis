@@ -420,7 +420,9 @@ final class Workspace {
         return PersistedTerminalDock(
             sessions: sessions,
             activeSessionIndex: terminal.activePersistableIndex,
-            isVisible: terminal.isVisible
+            isVisible: terminal.isVisible,
+            height: Double(terminal.dockHeight),
+            width: Double(terminal.dockWidth)
         )
     }
 
@@ -434,6 +436,11 @@ final class Workspace {
             let state = WorkspaceStateStore.load(for: rootURL)
             await restorePersistedLayout(state)
             if let dock = state?.terminal {
+                // Size first, and unconditionally: it must come back even for a
+                // hidden or empty dock, whereas restoreTerminalDock bails when
+                // there are no persisted tabs.
+                if let height = dock.height { terminal.dockHeight = CGFloat(height) }
+                if let width = dock.width { terminal.dockWidth = CGFloat(width) }
                 restoreTerminalDock(dock, settings: settings)
             }
         }

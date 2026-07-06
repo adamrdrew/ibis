@@ -407,22 +407,6 @@ struct WorkspaceView: View {
         )
     }
 
-    /// The persisted terminal dock size, as `CGFloat` bindings for the resize
-    /// handle. Written back to settings so they survive relaunch.
-    private var terminalHeightBinding: Binding<CGFloat> {
-        Binding(
-            get: { CGFloat(settings.terminalDockHeight) },
-            set: { settings.terminalDockHeight = Double($0) }
-        )
-    }
-
-    private var terminalWidthBinding: Binding<CGFloat> {
-        Binding(
-            get: { CGFloat(settings.terminalDockWidth) },
-            set: { settings.terminalDockWidth = Double($0) }
-        )
-    }
-
     /// Launches the configured agent in a new terminal, revealing the dock.
     private func openAgent() {
         guard let workspace else { return }
@@ -483,20 +467,31 @@ struct WorkspaceView: View {
                     ? AnyLayout(HStackLayout(spacing: 0))
                     : AnyLayout(VStackLayout(spacing: 0))
 
-                // Clamp so neither the editor nor the terminal can vanish.
+                // Clamp so neither the editor nor the terminal can vanish. The
+                // remembered size may exceed what this window currently allows;
+                // we show the clamped value and hand the *clamped* size to the
+                // resize handle so a drag always starts from what's on screen.
                 let maxHeight = max(120, proxy.size.height - 140)
                 let maxWidth = max(200, proxy.size.width - 280)
-                let height = min(max(80, CGFloat(settings.terminalDockHeight)), maxHeight)
-                let width = min(max(200, CGFloat(settings.terminalDockWidth)), maxWidth)
+                let height = min(max(80, workspace.terminal.dockHeight), maxHeight)
+                let width = min(max(200, workspace.terminal.dockWidth), maxWidth)
 
                 layout {
                     editorArea(workspace)
 
                     if isVisible {
                         if trailing {
-                            TerminalResizeHandle(size: terminalWidthBinding, minSize: 200, maxSize: maxWidth, vertical: true)
+                            TerminalResizeHandle(
+                                size: width, minSize: 200, maxSize: maxWidth, vertical: true,
+                                onResize: { workspace.terminal.dockWidth = $0 },
+                                onCommit: { workspace.persistLayoutState() }
+                            )
                         } else {
-                            TerminalResizeHandle(size: terminalHeightBinding, minSize: 80, maxSize: maxHeight, vertical: false)
+                            TerminalResizeHandle(
+                                size: height, minSize: 80, maxSize: maxHeight, vertical: false,
+                                onResize: { workspace.terminal.dockHeight = $0 },
+                                onCommit: { workspace.persistLayoutState() }
+                            )
                         }
                     }
 
@@ -596,10 +591,18 @@ private struct WindowBridge: NSViewRepresentable {
 /// toward the editor grows the terminal; the size is clamped so both stay
 /// usable. `vertical` means a vertical divider (terminal on the trailing edge).
 private struct TerminalResizeHandle: View {
-    @Binding var size: CGFloat
+    /// The terminal's current *on-screen* size (already clamped to this window),
+    /// so a drag always starts from what the user sees — even when the remembered
+    /// size is larger than the current window can show.
+    let size: CGFloat
     let minSize: CGFloat
     let maxSize: CGFloat
     let vertical: Bool
+    /// Applies a new size during the drag (live). Kept per window by the caller.
+    let onResize: (CGFloat) -> Void
+    /// Called once the drag (or an accessibility adjust) settles, so the size can
+    /// be persisted without churning the store on every pixel.
+    let onCommit: () -> Void
 
     @State private var dragStart: CGFloat?
 
@@ -622,9 +625,12 @@ private struct TerminalResizeHandle: View {
                     let base = dragStart ?? size
                     if dragStart == nil { dragStart = base }
                     let delta = vertical ? value.translation.width : value.translation.height
-                    size = min(max(minSize, base - delta), maxSize)
+                    onResize(min(max(minSize, base - delta), maxSize))
                 }
-                .onEnded { _ in dragStart = nil }
+                .onEnded { _ in
+                    dragStart = nil
+                    onCommit()
+                }
         )
         // Expose the drag-only divider to assistive tech.
         .accessibilityElement()
@@ -634,10 +640,11 @@ private struct TerminalResizeHandle: View {
         .accessibilityAdjustableAction { direction in
             let step: CGFloat = 24
             switch direction {
-            case .increment: size = min(size + step, maxSize)
-            case .decrement: size = max(size - step, minSize)
+            case .increment: onResize(min(size + step, maxSize))
+            case .decrement: onResize(max(size - step, minSize))
             @unknown default: break
             }
+            onCommit()
         }
     }
 }

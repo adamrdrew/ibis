@@ -11,6 +11,14 @@ final class TerminalDock {
     var activeSessionID: TerminalSession.ID?
     var isVisible = false
 
+    /// The dock's size along the resize axis, kept *per window* (not in global
+    /// settings, which made every open window resize in lockstep). Height is used
+    /// when the dock is at the bottom, width when it's on the trailing edge; both
+    /// are stored so flipping placement restores each orientation's own size.
+    /// Persisted per workspace root via `WorkspaceStateStore`.
+    var dockHeight: CGFloat = 240
+    var dockWidth: CGFloat = 480
+
     /// Working directory new terminals open in (the workspace root).
     let workingDirectory: URL
 

@@ -18,6 +18,11 @@ struct PersistedTerminalDock: Codable {
     /// Index into `sessions` of the active tab (-1 for none).
     var activeSessionIndex: Int
     var isVisible: Bool
+    /// The dock's remembered size: `height` when docked at the bottom, `width`
+    /// when trailing. Optional so payloads written before per-root dock sizing
+    /// still decode (falling back to the dock's defaults).
+    var height: Double? = nil
+    var width: Double? = nil
 }
 
 /// A snapshot of a window's editor layout, persisted per workspace root so the
