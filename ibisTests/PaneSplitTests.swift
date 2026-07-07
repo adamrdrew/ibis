@@ -1,27 +1,37 @@
 import Testing
 import Foundation
-import AppKit
 @testable import ibis
 
-/// The AppKit split-view bridge that persists/restores editor pane widths. Its
-/// attach-and-observe wiring needs a live window and can only be verified in the
-/// running app; these cover the parts that are unit-testable: the width→fraction
-/// math and the model-side restore wiring.
+/// The editor's custom horizontal splitter: the pure width math, plus the
+/// model-side restore wiring that stages saved pane proportions. The live drag
+/// gesture needs a running window and is verified in the app.
 @MainActor
-@Suite(.serialized) struct PaneLayoutBridgeTests {
+@Suite(.serialized) struct PaneSplitTests {
     @Test func fractionsAreEachPanesShareOfTotalWidth() {
-        #expect(PaneLayoutBridge.BridgeView.fractions(widths: [30, 70]) == [0.3, 0.7])
-        #expect(PaneLayoutBridge.BridgeView.fractions(widths: [100, 100, 200]) == [0.25, 0.25, 0.5])
+        #expect(PaneWidths.fractions(widths: [30, 70]) == [0.3, 0.7])
+        #expect(PaneWidths.fractions(widths: [100, 100, 200]) == [0.25, 0.25, 0.5])
     }
 
     @Test func fractionsAreEmptyForZeroWidth() {
         // Before the split has laid out, widths can be zero — no divide-by-zero,
-        // and the caller's count check then rejects the empty result.
-        #expect(PaneLayoutBridge.BridgeView.fractions(widths: [0, 0]).isEmpty)
-        #expect(PaneLayoutBridge.BridgeView.fractions(widths: []).isEmpty)
+        // and the caller falls back to an equal split.
+        #expect(PaneWidths.fractions(widths: [0, 0]).isEmpty)
+        #expect(PaneWidths.fractions(widths: []).isEmpty)
     }
 
-    @Test func restoreArmsPendingFractionsWhenEveryPaneSurvives() async throws {
+    @Test func widthsUseFractionsWhenTheyMatchTheCount() {
+        #expect(PaneWidths.widths(content: 200, count: 2, fractions: [0.25, 0.75]) == [50, 150])
+    }
+
+    @Test func widthsFallBackToEqualSplit() {
+        // No fractions, a count mismatch, or a degenerate (zero-sum) set all fall
+        // back to an even division so a pane never collapses to nothing.
+        #expect(PaneWidths.widths(content: 300, count: 3, fractions: nil) == [100, 100, 100])
+        #expect(PaneWidths.widths(content: 200, count: 2, fractions: [0.5]) == [100, 100])
+        #expect(PaneWidths.widths(content: 200, count: 2, fractions: [0, 0]) == [100, 100])
+    }
+
+    @Test func restoreKeepsSavedFractionsWhenEveryPaneSurvives() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let a = dir.appending(path: "a.txt")
@@ -40,11 +50,10 @@ import AppKit
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 await workspace.restorePersistedLayout()
 
-                // Both panes survived, so the saved widths are staged for the
-                // bridge to apply once the split view grows its panes.
+                // Both panes survived, so the splitter lays them out at the saved
+                // proportions.
                 #expect(workspace.layout.panes.count == 2)
                 #expect(workspace.paneWidthFractions == [0.35, 0.65])
-                #expect(workspace.pendingPaneWidthFractions == [0.35, 0.65])
             }
         }
     }
@@ -54,7 +63,7 @@ import AppKit
             try await TestSupport.withTempDir { dir in
                 // Two panes were saved, but one pane's only file is now missing,
                 // so the restored layout collapses to a single pane — the saved
-                // two-way split no longer applies and must not be staged.
+                // two-way split no longer applies.
                 let survivor = dir.appending(path: "survivor.txt")
                 try "s".write(to: survivor, atomically: true, encoding: .utf8)
                 let gone = dir.appending(path: "gone.txt").path(percentEncoded: false)
@@ -71,7 +80,7 @@ import AppKit
                 await workspace.restorePersistedLayout()
 
                 #expect(workspace.layout.panes.count == 1)
-                #expect(workspace.pendingPaneWidthFractions == nil)
+                #expect(workspace.paneWidthFractions == nil)
             }
         }
     }

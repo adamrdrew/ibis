@@ -59,3 +59,29 @@ enum ProjectConfigOpenStore {
         root.resolvingSymlinksInPath().standardizedFileURL.path
     }
 }
+
+/// Remembers projects where the user declined the proactive offer to add Ibis to
+/// an existing agent MCP config, so Ibis doesn't re-ask on every open. Accepting
+/// needs no record — the Ibis entry is then present, so the offer never fires
+/// again on its own. Keyed by project root path in `UserDefaults`.
+@MainActor
+enum MCPAdoptionStore {
+    private static var defaults: UserDefaults { IbisDefaults.store }
+    private static let declinedKey = "ibisMCP.declinedRoots"
+
+    static func hasDeclined(_ root: URL) -> Bool {
+        (defaults.stringArray(forKey: declinedKey) ?? []).contains(key(for: root))
+    }
+
+    static func setDeclined(_ root: URL) {
+        var list = defaults.stringArray(forKey: declinedKey) ?? []
+        let k = key(for: root)
+        guard !list.contains(k) else { return }
+        list.append(k)
+        defaults.set(list, forKey: declinedKey)
+    }
+
+    private static func key(for root: URL) -> String {
+        root.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+}

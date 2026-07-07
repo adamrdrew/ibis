@@ -11,6 +11,47 @@ nonisolated enum MCPConfigWriter {
 
     static func serverURL(port: Int) -> String { "http://127.0.0.1:\(port)/mcp" }
 
+    /// Whether a project already carries an agent MCP config, and whether the
+    /// Ibis entry is in it — so Ibis can proactively offer to add itself to a
+    /// project that already uses MCP but doesn't yet point at Ibis.
+    enum ProjectConfigState: Equatable {
+        /// No agent MCP config file (for the chosen agent) exists in the project.
+        case none
+        /// A config exists and already references the Ibis server.
+        case ibisPresent
+        /// A config exists but doesn't reference Ibis yet.
+        case missingIbis
+    }
+
+    /// Inspects the project for the config file the chosen agent reads, without
+    /// modifying anything. An unreadable/unparseable JSON config reports `.none`:
+    /// it can't be safely merged (the merge in `write` aborts on it anyway), so
+    /// there's nothing to cleanly offer.
+    static func projectState(agent: AgentKind, projectRoot: URL) -> ProjectConfigState {
+        switch agent {
+        case .claude, .custom:
+            return jsonState(file: projectRoot.appending(path: ".mcp.json"))
+        case .antigravity:
+            return jsonState(file: projectRoot.appending(path: ".agents/mcp_config.json"))
+        case .codex:
+            return codexState(file: projectRoot.appending(path: ".codex/config.toml"))
+        }
+    }
+
+    private static func jsonState(file: URL) -> ProjectConfigState {
+        guard FileManager.default.fileExists(atPath: file.path(percentEncoded: false)) else { return .none }
+        guard let data = try? Data(contentsOf: file),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return .none }
+        let servers = root["mcpServers"] as? [String: Any]
+        return servers?["ibis"] != nil ? .ibisPresent : .missingIbis
+    }
+
+    private static func codexState(file: URL) -> ProjectConfigState {
+        guard let contents = try? String(contentsOf: file, encoding: .utf8) else { return .none }
+        return contents.contains("[mcp_servers.ibis]") ? .ibisPresent : .missingIbis
+    }
+
     static func write(agent: AgentKind, projectRoot: URL, port: Int, token: String) throws -> Result {
         switch agent {
         case .claude, .custom:

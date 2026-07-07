@@ -5,9 +5,15 @@ import SwiftUI
 /// file (and keeps it out of git), Cancel reverts to the last saved version.
 struct ProjectSettingsView: View {
     @Bindable var config: ProjectConfig
+    /// The window's workspace, so the MCP section can write this project's config.
+    var workspace: Workspace
     /// Persist the config and re-apply env. Called on Done.
     var commit: () -> Void
     var dismiss: () -> Void
+
+    @Environment(AppSettings.self) private var settings
+    @State private var mcpStatus: String?
+    @State private var mcpIsError = false
 
     var body: some View {
         NavigationStack {
@@ -20,6 +26,7 @@ struct ProjectSettingsView: View {
                 }
                 actionsSection
                 environmentSection
+                agentSection
             }
             .formStyle(.grouped)
             .navigationTitle("Project Settings")
@@ -84,6 +91,44 @@ struct ProjectSettingsView: View {
             Text("Environment Variables")
         } footer: {
             Text("Injected into terminal and agent sessions opened afterward. Saved in .ibis.json, which Ibis adds to .gitignore.")
+        }
+    }
+
+    // MARK: - Agent (MCP)
+
+    @ViewBuilder
+    private var agentSection: some View {
+        Section {
+            if !MCPService.isAvailable {
+                Text("The MCP server isn’t available in this build.")
+                    .foregroundStyle(.secondary)
+            } else if !settings.mcpEnabled {
+                Text("Turn on the Ibis MCP server in Settings ▸ Agent, then add it to this project so \(settings.agentName) can connect.")
+                    .foregroundStyle(.secondary)
+            } else {
+                Button("Add Ibis to \(settings.agentKind.displayName) Config") {
+                    addIbisToConfig()
+                }
+                if let mcpStatus {
+                    Text(mcpStatus)
+                        .font(.callout)
+                        .foregroundStyle(mcpIsError ? .red : .secondary)
+                }
+            }
+        } header: {
+            Text("Agent Integration")
+        } footer: {
+            Text("Writes the Ibis MCP server entry into this project so \(settings.agentName) can use Ibis’s tools (open files, propose edits, and more) in this window.")
+        }
+    }
+
+    private func addIbisToConfig() {
+        do {
+            mcpStatus = try workspace.addIbisToAgentConfig(settings: settings)
+            mcpIsError = false
+        } catch {
+            mcpStatus = "Couldn’t write config: \(error.localizedDescription)"
+            mcpIsError = true
         }
     }
 

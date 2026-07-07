@@ -29,10 +29,22 @@ struct TerminalDockView: View {
 
     private var header: some View {
         HStack(spacing: 4) {
+            // Tabs take the leftover width and scroll; the controls are pinned so
+            // they never clip when the dock is narrow.
             TerminalTabBarView(dock: dock)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(0)
 
-            Spacer(minLength: 0)
+            trailingControls
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .frame(height: EditorChrome.headerHeight)
+        .background(.bar)
+    }
 
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
             Button {
                 dock.newSession()
             } label: {
@@ -60,10 +72,8 @@ struct TerminalDockView: View {
             .help("Hide Terminal")
             .accessibilityLabel("Hide Terminal")
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .frame(height: EditorChrome.headerHeight)
-        .background(.bar)
+        .fixedSize()
+        .layoutPriority(1)
     }
 
     // All sessions stay mounted so each terminal keeps its live process and

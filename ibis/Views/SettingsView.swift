@@ -166,8 +166,6 @@ private struct TerminalSettingsView: View {
 
 private struct AgentSettingsView: View {
     @Environment(AppSettings.self) private var settings
-    @State private var status: String?
-    @State private var isError = false
 
     var body: some View {
         @Bindable var settings = settings
@@ -229,50 +227,13 @@ private struct AgentSettingsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
-            }
 
-            Section("Project Configuration") {
-                Button("Add Ibis to \(settings.agentKind.displayName) Config") {
-                    writeConfig()
-                }
-                .disabled(MCPBridge.shared.frontmostWorkspace == nil)
-
-                if let status {
-                    Text(status)
-                        .font(.callout)
-                        .foregroundStyle(isError ? .red : .secondary)
-                }
-
-                Text("Writes the Ibis MCP server entry into the frontmost project so your agent can connect.")
+                Text("To connect an individual project, add the Ibis server to it from that project’s Project Settings.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
-    }
-
-    private func writeConfig() {
-        guard let workspace = MCPBridge.shared.frontmostWorkspace else {
-            status = "Open a project window first."
-            isError = true
-            return
-        }
-        let port = MCPService.runningPort ?? settings.mcpPort
-        do {
-            let result = try MCPConfigWriter.write(
-                agent: settings.agentKind,
-                // Project directory, not rootURL (which is the file itself for a
-                // single-file workspace) — see MCPService.bindAgent.
-                projectRoot: workspace.projectRoot,
-                port: port,
-                token: MCPBridge.shared.token(for: workspace)
-            )
-            status = result.message
-            isError = false
-        } catch {
-            status = "Couldn't write config: \(error.localizedDescription)"
-            isError = true
-        }
     }
 }
 

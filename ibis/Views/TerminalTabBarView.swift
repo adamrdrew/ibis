@@ -39,7 +39,10 @@ struct TerminalTabBarView: View {
                 }
             }
         }
-        .scrollIndicators(.hidden)
+        // `.never` (not `.hidden`): on macOS 26 a `.hidden` horizontal indicator
+        // can still surface a scroller when the tabs overflow; `.never` keeps the
+        // strip scrollable with no bar on both 26 and 27.
+        .scrollIndicators(.never)
     }
 }
 

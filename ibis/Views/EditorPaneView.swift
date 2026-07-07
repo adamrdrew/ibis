@@ -30,6 +30,9 @@ struct EditorPaneView: View {
 
     private var header: some View {
         HStack(spacing: 4) {
+            // The tab strip takes whatever width is left after the pinned
+            // controls and scrolls when the tabs don't fit — so tabs yield
+            // space, never the controls.
             TabBarView(
                 workspace: workspace,
                 pane: pane,
@@ -42,19 +45,37 @@ struct EditorPaneView: View {
                     onCloseTab(document, pane)
                 }
             )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
 
-            Spacer(minLength: 0)
+            trailingControls
+        }
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .frame(height: EditorChrome.headerHeight)
+        .background(.bar)
+    }
 
-            // Source / Preview toggle for renderable files (Markdown / HTML).
+    /// The pane's action cluster, pinned to the trailing edge. `fixedSize` keeps
+    /// it at its intrinsic width and the higher layout priority makes the tab
+    /// strip (not these controls) give up space when the pane is narrow, so the
+    /// buttons never clip or scroll off. The pane's minimum width
+    /// (`EditorChrome.paneMinWidth`) guarantees room for this cluster.
+    private var trailingControls: some View {
+        HStack(spacing: 4) {
+            // Source / Preview toggle for renderable files (Markdown / HTML):
+            // a single eye button, tinted with the accent when preview is on.
             if let document = pane.selectedDocument, document.isRenderable {
-                Picker("View", selection: previewBinding(for: document)) {
-                    Text("Source").tag(false)
-                    Text("Preview").tag(true)
+                Button {
+                    document.showsPreview.toggle()
+                } label: {
+                    Image(systemName: document.showsPreview ? "eye.fill" : "eye")
+                        .foregroundStyle(document.showsPreview ? AnyShapeStyle(Color.ibisAccent) : AnyShapeStyle(.secondary))
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .help("Show rendered preview or raw source")
+                .buttonStyle(.plain)
+                .help(document.showsPreview ? "Show source" : "Show rendered preview")
+                .accessibilityLabel("Preview")
+                .accessibilityAddTraits(document.showsPreview ? [.isSelected] : [])
             }
 
             Button {
@@ -79,10 +100,8 @@ struct EditorPaneView: View {
                 .accessibilityLabel("Close Pane")
             }
         }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .frame(height: EditorChrome.headerHeight)
-        .background(.bar)
+        .fixedSize()
+        .layoutPriority(1)
     }
 
     /// A thin banner above the editor (read-only / changed-on-disk warnings).
@@ -99,13 +118,6 @@ struct EditorPaneView: View {
         .frame(maxWidth: .infinity)
         .background(.bar)
         .overlay(alignment: .bottom) { Divider() }
-    }
-
-    private func previewBinding(for document: OpenDocument) -> Binding<Bool> {
-        Binding(
-            get: { document.showsPreview },
-            set: { document.showsPreview = $0 }
-        )
     }
 
     @ViewBuilder

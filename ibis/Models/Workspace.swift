@@ -367,17 +367,11 @@ final class Workspace {
         layout.panes.contains { !$0.tabDocuments.isEmpty } || !terminal.persistableSessions.isEmpty
     }
 
-    /// Each editor pane's share of the split width, kept current by
-    /// `PaneLayoutBridge` (which watches the AppKit split view) and included in
-    /// every persisted snapshot. Excluded from observation: it updates per
-    /// pixel during a divider drag, and nothing renders from it.
-    @ObservationIgnored var paneWidthFractions: [Double]?
-
-    /// Restored fractions waiting for the split view to grow its panes, applied
-    /// and then cleared by `PaneLayoutBridge`. While non-nil, the bridge pauses
-    /// recording, so the initial equal-width layout can't overwrite the saved
-    /// proportions.
-    @ObservationIgnored var pendingPaneWidthFractions: [Double]?
+    /// Each editor pane's share of the editor width (one entry per pane, summing
+    /// to ~1), included in every persisted snapshot. `EditorAreaView` reads this
+    /// to lay the panes out and writes it as a divider is dragged, so it's
+    /// observed — a restore or a drag must re-lay the split.
+    var paneWidthFractions: [Double]?
 
     func persistLayoutState() {
         guard isDirectory, restorationComplete else { return }
@@ -496,11 +490,10 @@ final class Workspace {
         layout.activePaneID = panes[activeIndex].id
 
         // Saved pane widths only make sense if every pane survived (missing
-        // files can drop panes above); PaneLayoutBridge applies them once the
-        // AppKit split view has grown the restored panes.
+        // files can drop panes above); the splitter reads these fractions to lay
+        // the restored panes out at their saved proportions.
         if let fractions = state.paneWidthFractions, fractions.count == panes.count {
             paneWidthFractions = fractions
-            pendingPaneWidthFractions = fractions.count > 1 ? fractions : nil
         }
     }
 
@@ -1092,6 +1085,40 @@ final class Workspace {
         }
     }
 
+    // MARK: - Agent MCP config
+
+    /// Writes (merges) the Ibis MCP server entry into this project's agent config
+    /// file, in the format of the app's chosen agent, so the agent can reach
+    /// this window. Returns the human-readable result; throws if an existing
+    /// config couldn't be parsed/merged. Uses the running port when the server
+    /// is up, else the preferred port (same as launch-time binding).
+    @discardableResult
+    func addIbisToAgentConfig(settings: AppSettings) throws -> String {
+        let port = MCPService.runningPort ?? settings.mcpPort
+        let result = try MCPConfigWriter.write(
+            agent: settings.agentKind,
+            projectRoot: projectRoot,
+            port: port,
+            token: MCPBridge.shared.token(for: self)
+        )
+        return result.message
+    }
+
+    /// Drives the proactive "add Ibis to your MCP config?" prompt in the window.
+    var mcpAdoptionOffer = false
+
+    /// Decides whether to proactively offer to add Ibis to this project's
+    /// existing agent MCP config. Fires only when the agent feature is on, the
+    /// project already has an MCP config that lacks the Ibis entry, and the user
+    /// hasn't declined before. Skipped while a trust decision is pending so two
+    /// prompts don't stack on the same window.
+    func evaluateAgentConfigOffer(settings: AppSettings) {
+        guard MCPService.isAvailable, settings.mcpEnabled else { return }
+        guard !trustPromptNeeded, !MCPAdoptionStore.hasDeclined(projectRoot) else { return }
+        guard MCPConfigWriter.projectState(agent: settings.agentKind, projectRoot: projectRoot) == .missingIbis else { return }
+        mcpAdoptionOffer = true
+    }
+
     // MARK: - Trust
 
     /// The actions Ibis will expose/run — none until the folder is trusted.
@@ -1232,8 +1259,8 @@ final class Workspace {
     /// user resolves it, or (re-entrantly) declining to prompt twice.
     func requestWindowClose(proceed: @escaping () -> Void) -> Bool {
         // Flush the layout now: persistence is otherwise edge-triggered, so a
-        // change still inside PaneLayoutBridge's debounce (or made before the
-        // restore gate opened) would be lost with the window.
+        // change made before the restore gate opened would be lost with the
+        // window.
         persistLayoutState()
         let dirty = dirtyDocuments
         guard !dirty.isEmpty else { return true }

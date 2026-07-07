@@ -23,6 +23,11 @@ struct WorkspaceView: View {
     @State private var bridge = MCPBridge.shared
     @State private var router = LaunchRouter.shared
 
+    /// The terminal's size (width when trailing, height when bottom) captured at
+    /// the start of a divider drag, so the drag applies its cumulative
+    /// translation against a stable base rather than compounding.
+    @State private var terminalDragBase: CGFloat?
+
     var body: some View {
         VStack(spacing: 0) {
             splitView
@@ -51,6 +56,7 @@ struct WorkspaceView: View {
             if let workspace {
                 ProjectSettingsView(
                     config: workspace.projectConfig,
+                    workspace: workspace,
                     commit: { workspace.commitProjectSettings() },
                     dismiss: { workspace.projectSettingsRequested = false }
                 )
@@ -73,6 +79,24 @@ struct WorkspaceView: View {
             }
         } message: {
             Text(trustPromptMessage)
+        }
+        // Proactive offer to wire Ibis into a project that already has an agent
+        // MCP config but doesn't yet reference Ibis (only when the MCP server is
+        // enabled). Declining is remembered so it doesn't re-ask every open.
+        .alert("Add Ibis to this project’s agent?", isPresented: mcpOfferPresented) {
+            Button("Add Ibis Tools") {
+                guard let workspace else { return }
+                do {
+                    try workspace.addIbisToAgentConfig(settings: settings)
+                } catch {
+                    workspace.presentError("Couldn’t add Ibis to the MCP config: \(error.localizedDescription)")
+                }
+            }
+            Button("Not Now", role: .cancel) {
+                if let workspace { MCPAdoptionStore.setDeclined(workspace.projectRoot) }
+            }
+        } message: {
+            Text("“\(workspace?.displayName ?? "This project")” already has an MCP configuration but doesn’t include Ibis. Add it so \(settings.agentName) can use Ibis’s tools (open files, propose edits, and more) in this window.")
         }
     }
 
@@ -272,6 +296,10 @@ struct WorkspaceView: View {
             if LaunchRouter.shared.consumeAgentLaunch(for: workspace.rootURL) {
                 armAgentLaunch(in: workspace)
             }
+            // Offer to wire Ibis into a project that already uses MCP. Last, so
+            // an immediate agent launch above (which writes the config itself)
+            // is reflected and no offer fires.
+            workspace.evaluateAgentConfigOffer(settings: settings)
         }
         .task(id: selection) {
             guard let selection, let workspace else { return }
@@ -397,6 +425,13 @@ struct WorkspaceView: View {
         )
     }
 
+    private var mcpOfferPresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.mcpAdoptionOffer ?? false },
+            set: { if !$0 { workspace?.mcpAdoptionOffer = false } }
+        )
+    }
+
     private var diffReviewPresented: Binding<Bool> {
         Binding(
             get: { workspace?.pendingDiff != nil },
@@ -471,28 +506,58 @@ struct WorkspaceView: View {
                 // remembered size may exceed what this window currently allows;
                 // we show the clamped value and hand the *clamped* size to the
                 // resize handle so a drag always starts from what's on screen.
+                //
+                // Trailing: the terminal may grow up to 80% of the width, but we
+                // reserve a full minimum pane for *each* open editor pane (+ the
+                // handle) so the terminal — and its header tabs/controls — can
+                // never be pushed past the window's right edge, and no pane's own
+                // tab-bar controls get squeezed off. The editor then gets an
+                // *explicit* width (editor + handle + terminal == available), which
+                // keeps the HStack from overflowing regardless of the editor's own
+                // content minimum (a plain `maxWidth: .infinity` editor won't
+                // shrink below its minimum, so a fixed-width terminal would spill).
+                let handleWidth: CGFloat = 6
+                let paneCount = max(1, workspace.layout.panes.count)
+                let editorReserve = EditorChrome.paneMinWidth * CGFloat(paneCount)
+                let maxWidth = max(200, min(proxy.size.width * 0.8,
+                                            proxy.size.width - editorReserve - handleWidth))
                 let maxHeight = max(120, proxy.size.height - 140)
-                let maxWidth = max(200, proxy.size.width - 280)
-                let height = min(max(80, workspace.terminal.dockHeight), maxHeight)
                 let width = min(max(200, workspace.terminal.dockWidth), maxWidth)
+                let height = min(max(80, workspace.terminal.dockHeight), maxHeight)
+                let editorWidth = max(0, proxy.size.width - handleWidth - width)
 
                 layout {
                     editorArea(workspace)
+                        // Fixed width in trailing mode so the split sums exactly
+                        // to the available width; flexible otherwise (bottom dock
+                        // or hidden terminal, where the editor fills the row).
+                        .frame(width: trailing && isVisible ? editorWidth : nil)
 
                     if isVisible {
-                        if trailing {
-                            TerminalResizeHandle(
-                                size: width, minSize: 200, maxSize: maxWidth, vertical: true,
-                                onResize: { workspace.terminal.dockWidth = $0 },
-                                onCommit: { workspace.persistLayoutState() }
-                            )
-                        } else {
-                            TerminalResizeHandle(
-                                size: height, minSize: 80, maxSize: maxHeight, vertical: false,
-                                onResize: { workspace.terminal.dockHeight = $0 },
-                                onCommit: { workspace.persistLayoutState() }
-                            )
-                        }
+                        // The same divider component (and drag model) as the one
+                        // between editor panes, so the terminal resizes as a
+                        // first-class slice of the one split system.
+                        SplitDivider(
+                            vertical: trailing,
+                            onChanged: { translation in
+                                dragTerminal(
+                                    workspace, translation: translation, trailing: trailing,
+                                    maxWidth: maxWidth, maxHeight: maxHeight
+                                )
+                            },
+                            onEnded: {
+                                terminalDragBase = nil
+                                workspace.persistLayoutState()
+                            },
+                            accessibilityLabel: "Resize Terminal",
+                            onAdjust: { step in
+                                adjustTerminal(
+                                    workspace, step: step, trailing: trailing,
+                                    maxWidth: maxWidth, maxHeight: maxHeight
+                                )
+                                workspace.persistLayoutState()
+                            }
+                        )
                     }
 
                     dock(workspace)
@@ -533,6 +598,36 @@ struct WorkspaceView: View {
     // SwiftTerm views are never detached — detaching resets their scrollback.
     private func dock(_ workspace: Workspace) -> some View {
         TerminalDockView(workspace: workspace, dock: workspace.terminal)
+    }
+
+    /// Resizes the terminal from a divider drag. Dragging the divider *toward*
+    /// the editor grows the terminal (hence `base - translation`); clamped so
+    /// neither side vanishes.
+    private func dragTerminal(
+        _ workspace: Workspace, translation: CGFloat, trailing: Bool,
+        maxWidth: CGFloat, maxHeight: CGFloat
+    ) {
+        let current = trailing ? workspace.terminal.dockWidth : workspace.terminal.dockHeight
+        let base = terminalDragBase ?? current
+        if terminalDragBase == nil { terminalDragBase = base }
+        if trailing {
+            workspace.terminal.dockWidth = min(max(200, base - translation), maxWidth)
+        } else {
+            workspace.terminal.dockHeight = min(max(80, base - translation), maxHeight)
+        }
+    }
+
+    /// Grows (or shrinks) the terminal by a discrete step for the divider's
+    /// accessibility adjustable action.
+    private func adjustTerminal(
+        _ workspace: Workspace, step: CGFloat, trailing: Bool,
+        maxWidth: CGFloat, maxHeight: CGFloat
+    ) {
+        if trailing {
+            workspace.terminal.dockWidth = min(max(200, workspace.terminal.dockWidth + step), maxWidth)
+        } else {
+            workspace.terminal.dockHeight = min(max(80, workspace.terminal.dockHeight + step), maxHeight)
+        }
     }
 
     private func openSearchResult(_ url: URL, _ range: NSRange) {
@@ -587,70 +682,3 @@ private struct WindowBridge: NSViewRepresentable {
     }
 }
 
-/// A draggable divider between the editor and the terminal dock. Dragging
-/// toward the editor grows the terminal; the size is clamped so both stay
-/// usable. `vertical` means a vertical divider (terminal on the trailing edge).
-private struct TerminalResizeHandle: View {
-    /// The terminal's current *on-screen* size (already clamped to this window),
-    /// so a drag always starts from what the user sees — even when the remembered
-    /// size is larger than the current window can show.
-    let size: CGFloat
-    let minSize: CGFloat
-    let maxSize: CGFloat
-    let vertical: Bool
-    /// Applies a new size during the drag (live). Kept per window by the caller.
-    let onResize: (CGFloat) -> Void
-    /// Called once the drag (or an accessibility adjust) settles, so the size can
-    /// be persisted without churning the store on every pixel.
-    let onCommit: () -> Void
-
-    @State private var dragStart: CGFloat?
-
-    var body: some View {
-        let line = Rectangle().fill(Color(nsColor: .separatorColor))
-        Group {
-            if vertical { line.frame(width: 1) } else { line.frame(height: 1) }
-        }
-        .frame(width: vertical ? 6 : nil, height: vertical ? nil : 6)
-        .frame(maxWidth: vertical ? nil : .infinity, maxHeight: vertical ? .infinity : nil)
-        .contentShape(Rectangle())
-        // `pointerStyle` sets the resize cursor only while the pointer is over
-        // the handle and restores it automatically — unlike a manual
-        // NSCursor.push()/pop() in onHover, which leaks a pushed cursor if the
-        // handle is unmounted (⌃` hiding the terminal) while hovered.
-        .pointerStyle(vertical ? .columnResize : .rowResize)
-        // Measure the drag in the *global* (window) coordinate space, not the
-        // default local one. The handle sits between the editor and the dock, so
-        // as the dock resizes the handle moves with it — a local translation is
-        // measured against a frame that's sliding under the pointer, which feeds
-        // back into the value and makes the resize jumpy. Window coordinates
-        // don't move with the handle, so the delta stays stable.
-        .gesture(
-            DragGesture(coordinateSpace: .global)
-                .onChanged { value in
-                    let base = dragStart ?? size
-                    if dragStart == nil { dragStart = base }
-                    let delta = vertical ? value.translation.width : value.translation.height
-                    onResize(min(max(minSize, base - delta), maxSize))
-                }
-                .onEnded { _ in
-                    dragStart = nil
-                    onCommit()
-                }
-        )
-        // Expose the drag-only divider to assistive tech.
-        .accessibilityElement()
-        .accessibilityLabel("Resize Terminal")
-        .accessibilityValue(vertical ? "Width \(Int(size))" : "Height \(Int(size))")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAdjustableAction { direction in
-            let step: CGFloat = 24
-            switch direction {
-            case .increment: onResize(min(size + step, maxSize))
-            case .decrement: onResize(max(size - step, minSize))
-            @unknown default: break
-            }
-            onCommit()
-        }
-    }
-}
