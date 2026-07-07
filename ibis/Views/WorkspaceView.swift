@@ -619,8 +619,14 @@ private struct TerminalResizeHandle: View {
         // NSCursor.push()/pop() in onHover, which leaks a pushed cursor if the
         // handle is unmounted (⌃` hiding the terminal) while hovered.
         .pointerStyle(vertical ? .columnResize : .rowResize)
+        // Measure the drag in the *global* (window) coordinate space, not the
+        // default local one. The handle sits between the editor and the dock, so
+        // as the dock resizes the handle moves with it — a local translation is
+        // measured against a frame that's sliding under the pointer, which feeds
+        // back into the value and makes the resize jumpy. Window coordinates
+        // don't move with the handle, so the delta stays stable.
         .gesture(
-            DragGesture()
+            DragGesture(coordinateSpace: .global)
                 .onChanged { value in
                     let base = dragStart ?? size
                     if dragStart == nil { dragStart = base }
