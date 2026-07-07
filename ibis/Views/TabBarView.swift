@@ -65,6 +65,12 @@ private struct TabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // Close / dirty indicator lives on the leading edge (the macOS
+            // convention) in a fixed-width slot that's always present, so the
+            // tab's width never changes as the close control appears on hover.
+            leading
+                .frame(width: 14, height: 14)
+
             // The selectable region is a real Button so it's reachable by Full
             // Keyboard Access and activatable by VoiceOver (a bare tap gesture is
             // invisible to both). The close control stays a sibling button.
@@ -83,9 +89,6 @@ private struct TabItemView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(document.name + (document.isDirty ? ", edited" : ""))
             .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
-
-            trailing
-                .frame(width: 14, height: 14)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -132,7 +135,7 @@ private struct TabItemView: View {
     }
 
     @ViewBuilder
-    private var trailing: some View {
+    private var leading: some View {
         if document.isDirty && !isHovering {
             Circle()
                 .fill(.secondary)
@@ -146,6 +149,10 @@ private struct TabItemView: View {
             .foregroundStyle(.secondary)
             .accessibilityLabel("Close Tab")
             .help("Close Tab")
+        } else {
+            // Empty placeholder keeps the slot's width reserved so idle tabs
+            // are the same size as hovered/active ones.
+            Color.clear
         }
     }
 }

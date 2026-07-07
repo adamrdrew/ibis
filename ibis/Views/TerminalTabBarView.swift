@@ -32,6 +32,12 @@ private struct TerminalTabItemView: View {
 
     var body: some View {
         HStack(spacing: 6) {
+            // Close control on the leading edge (macOS convention) in a
+            // fixed-width slot that's always present, so tab widths never shift
+            // when the close button appears on hover.
+            leading
+                .frame(width: 14, height: 14)
+
             Button(action: onSelect) {
                 HStack(spacing: 6) {
                     Image(systemName: "terminal")
@@ -48,9 +54,6 @@ private struct TerminalTabItemView: View {
             .buttonStyle(.plain)
             .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
             .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
-
-            trailing
-                .frame(width: 14, height: 14)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -66,7 +69,7 @@ private struct TerminalTabItemView: View {
     }
 
     @ViewBuilder
-    private var trailing: some View {
+    private var leading: some View {
         if isHovering || isCurrent {
             Button(action: onClose) {
                 Image(systemName: "xmark")
@@ -76,6 +79,10 @@ private struct TerminalTabItemView: View {
             .foregroundStyle(.secondary)
             .accessibilityLabel("Close Terminal")
             .help("Close Terminal")
+        } else {
+            // Empty placeholder keeps the slot's width reserved so idle tabs
+            // match hovered/active ones.
+            Color.clear
         }
     }
 }
