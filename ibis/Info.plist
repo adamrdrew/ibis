@@ -67,6 +67,19 @@
 				<string>public.data</string>
 			</array>
 		</dict>
+		<dict>
+			<!-- App-internal drag payload for reordering terminal tabs. Like the
+			     editor-tab type, a dedicated type keeps a tab dropped on the
+			     terminal from being accepted as plain text. See TerminalTabBarView. -->
+			<key>UTTypeIdentifier</key>
+			<string>com.adamdrew.ibis.terminal-tab</string>
+			<key>UTTypeDescription</key>
+			<string>Ibis Terminal Tab</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
 	</array>
 	<key>NSServices</key>
 	<array>

@@ -127,6 +127,22 @@ final class TerminalDock {
         if sessions.isEmpty { isVisible = false }
     }
 
+    /// Reorders a terminal tab, dropping the tab `fromID` onto the position of
+    /// `toID`. Returns `false` when the move can't apply (unknown ids), so the
+    /// drop declines instead of animating an accepted no-op. Mirrors
+    /// `EditorPane.moveTab`.
+    @discardableResult
+    func moveSession(fromID: TerminalSession.ID, toID: TerminalSession.ID) -> Bool {
+        guard fromID != toID,
+              let from = sessions.firstIndex(where: { $0.id == fromID }),
+              let to = sessions.firstIndex(where: { $0.id == toID }) else { return false }
+        let session = sessions.remove(at: from)
+        let insertion = sessions.firstIndex(where: { $0.id == toID }) ?? to
+        // Insert before the target when moving left, after it when moving right.
+        sessions.insert(session, at: from < to ? insertion + 1 : insertion)
+        return true
+    }
+
     /// Moves selection to an adjacent terminal tab, wrapping around.
     func selectAdjacent(offset: Int) {
         guard !sessions.isEmpty,

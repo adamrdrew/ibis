@@ -1,4 +1,20 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// A typed payload for dragging terminal tabs. Like the editor's tab transfer, a
+/// dedicated content type (not a bare `String`) means a tab dropped onto the
+/// terminal view is *not* accepted as plain text — so a slightly-missed reorder
+/// can no longer paste a UUID into the running shell.
+private extension UTType {
+    static let ibisTerminalTab = UTType(exportedAs: "com.adamdrew.ibis.terminal-tab")
+}
+
+private struct TerminalTabTransfer: Codable, Transferable {
+    let id: UUID
+    static var transferRepresentation: some TransferRepresentation {
+        CodableRepresentation(contentType: .ibisTerminalTab)
+    }
+}
 
 /// The horizontal tab strip in the terminal dock header. Parallels the editor's
 /// `TabBarView`: click to activate, kelly underline on the active tab.
@@ -15,6 +31,11 @@ struct TerminalTabBarView: View {
                         onSelect: { dock.activeSessionID = session.id },
                         onClose: { dock.closeSession(session.id) }
                     )
+                    .draggable(TerminalTabTransfer(id: session.id))
+                    .dropDestination(for: TerminalTabTransfer.self) { items, _ in
+                        guard let dropped = items.first else { return false }
+                        return dock.moveSession(fromID: dropped.id, toID: session.id)
+                    }
                 }
             }
         }
