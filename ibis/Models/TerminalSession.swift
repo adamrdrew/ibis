@@ -169,9 +169,16 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         lastShellOverride = shellOverride
         title = defaultTitle
         exitCode = nil
-        // For a command (agent / action), run it through a login shell (`-l -c`)
-        // so it inherits the user's PATH; otherwise launch an interactive shell.
-        let args = command.map { ["-l", "-c", $0] } ?? shell.args
+        // For a command (agent / action), run it through an interactive login
+        // shell (`-l -i -c`) so it sources the user's full profile — not just the
+        // login files but also the interactive rc (e.g. `~/.zshrc`), where PATH
+        // and per-session env like Claude's Vertex config (CLAUDE_CODE_USE_VERTEX,
+        // ANTHROPIC_VERTEX_PROJECT_ID, CLOUD_ML_REGION) commonly live. A plain
+        // `-l -c` shell skips `~/.zshrc`, so an agent launched that way misses
+        // those vars even though a normal (interactive) terminal tab sees them.
+        // `-c` still runs the command and exits, so exit/resume handling is
+        // unchanged. Otherwise launch a plain interactive shell.
+        let args = command.map { ["-l", "-i", "-c", $0] } ?? shell.args
         view.startProcess(
             executable: shell.executable,
             args: args,
