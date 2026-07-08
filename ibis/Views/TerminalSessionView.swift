@@ -10,9 +10,13 @@ struct TerminalSessionView: NSViewRepresentable {
     let font: NSFont
     let theme: TerminalTheme
     let shellOverride: String?
+    var agentName: String = "Agent"
+    var onSendToAgent: (String) -> Void = { _ in }
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        session.makeTerminalView(font: font, theme: theme, shellOverride: shellOverride)
+        let view = session.makeTerminalView(font: font, theme: theme, shellOverride: shellOverride)
+        wireSendToAgent(view)
+        return view
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
@@ -23,5 +27,12 @@ struct TerminalSessionView: NSViewRepresentable {
         // Settings or a light/dark appearance flip) fans out to all live
         // terminals; `apply(theme:)` no-ops when the theme is unchanged.
         session.apply(theme: theme)
+        wireSendToAgent(nsView)
+    }
+
+    private func wireSendToAgent(_ view: LocalProcessTerminalView) {
+        guard let ibisView = view as? IbisTerminalView else { return }
+        ibisView.onSendToAgent = onSendToAgent
+        ibisView.agentName = agentName
     }
 }

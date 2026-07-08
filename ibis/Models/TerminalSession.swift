@@ -90,6 +90,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// the user can start typing immediately.
     @ObservationIgnored var wantsFocus = false
 
+    /// Text queued by "Send to Agent" to type into this session's prompt once its
+    /// view is built and the process is up (set when a send launches a fresh
+    /// agent). Delivered by the deferred flush in `makeTerminalView`.
+    @ObservationIgnored var pendingPromptText: String?
+
     init(
         workingDirectory: URL,
         command: String? = nil,
@@ -158,8 +163,32 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
                 self.wantsFocus = false
                 view.window?.makeFirstResponder(view)
             }
+            self.flushPendingPromptText(on: view)
         }
         return view
+    }
+
+    /// Types `text` into the running program's prompt (as if the user typed it),
+    /// leaving the cursor there — the "insert, don't submit" delivery for "Send
+    /// to Agent". Queues it if the view isn't built yet.
+    func insertAtPrompt(_ text: String) {
+        guard let terminalView else { pendingPromptText = text; return }
+        terminalView.send(txt: text)
+        terminalView.window?.makeFirstResponder(terminalView)
+    }
+
+    /// Delivers text queued before the view/process existed (a "Send to Agent"
+    /// that launched this agent). Waits briefly so an agent TUI has come up and
+    /// is accepting input before typing into it.
+    private func flushPendingPromptText(on view: LocalProcessTerminalView) {
+        guard let text = pendingPromptText else { return }
+        pendingPromptText = nil
+        Task { @MainActor [weak view] in
+            try? await Task.sleep(for: .milliseconds(1200))
+            guard let view else { return }
+            view.send(txt: text)
+            view.window?.makeFirstResponder(view)
+        }
     }
 
     /// Applies a new font to the running terminal, if built.

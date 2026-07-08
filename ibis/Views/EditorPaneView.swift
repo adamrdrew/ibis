@@ -7,6 +7,7 @@ struct EditorPaneView: View {
     let layout: EditorLayout
     let configuration: EditorConfiguration
     var onCloseTab: (OpenDocument, EditorPane) -> Void
+    @Environment(AppSettings.self) private var settings
 
     private var isActive: Bool { layout.activePaneID == pane.id }
     private var hasMultiplePanes: Bool { layout.panes.count > 1 }
@@ -162,7 +163,9 @@ struct EditorPaneView: View {
                         document: document,
                         configuration: configuration,
                         onActivate: { layout.activePaneID = pane.id },
-                        focusRequest: pane.focusToken
+                        focusRequest: pane.focusToken,
+                        agentName: settings.agentName,
+                        onSendToAgent: { workspace.sendToAgent($0) }
                     )
                 }
                 .id(document.id)

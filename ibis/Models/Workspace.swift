@@ -44,6 +44,12 @@ final class Workspace {
     /// Set by the Project Settings menu command to open the settings sheet.
     var projectSettingsRequested = false
 
+    /// The app settings, set once by `WorkspaceView`. Held so deep AppKit call
+    /// sites (notably "Send to Agent" from a context menu, which has no
+    /// environment) can launch the configured agent. Weak — settings is a single
+    /// app-lifetime object owned by `IbisApp`.
+    @ObservationIgnored weak var settings: AppSettings?
+
     /// Holds security-scoped access to the root open for the workspace's lifetime.
     private let access: SecurityScopedAccess
 
@@ -1218,6 +1224,57 @@ final class Workspace {
     func runAgent(command: String, name: String, sessionID: String? = nil) {
         terminal.newSession(command: command, title: name, role: .agent, agentSessionID: sessionID)
         terminal.isVisible = true
+    }
+
+    /// The agent terminal to receive a "Send to Agent" payload: the active tab if
+    /// it's a running agent, otherwise the most recently opened running agent tab.
+    /// nil when no agent is running (the caller then launches one).
+    var runningAgentSession: TerminalSession? {
+        if let active = terminal.activeSession, active.role == .agent, active.isRunning {
+            return active
+        }
+        return terminal.sessions.last { $0.role == .agent && $0.isRunning }
+    }
+
+    /// Delivers `text` to the agent's prompt without submitting it, so the user
+    /// can add context before pressing Return. Reveals the dock and focuses the
+    /// agent tab. If no agent is running, launches the configured agent and
+    /// queues the text to arrive once its prompt is ready.
+    func sendToAgent(_ text: String) {
+        guard !text.isEmpty else { return }
+        // A trailing space keeps successive sends from gluing together.
+        let payload = text.hasSuffix(" ") ? text : text + " "
+        terminal.isVisible = true
+
+        if let agent = runningAgentSession {
+            terminal.activeSessionID = agent.id
+            agent.insertAtPrompt(payload)
+            return
+        }
+
+        guard let settings else { return }
+        launchConfiguredAgent(settings: settings)
+        // The freshly launched agent is now the active tab; it delivers the
+        // queued text once its view is built and the process is up.
+        if let launched = terminal.activeSession, launched.role == .agent {
+            launched.pendingPromptText = payload
+        }
+    }
+
+    /// A file/folder reference for the agent: its path relative to the workspace
+    /// root (the root itself becomes "."), double-quoted when it contains spaces.
+    func agentPathReference(for url: URL) -> String {
+        let root = rootURL.standardizedFileURL.path
+        let full = url.standardizedFileURL.path
+        let relative: String
+        if full == root {
+            relative = "."
+        } else if full.hasPrefix(root + "/") {
+            relative = String(full.dropFirst(root.count + 1))
+        } else {
+            relative = full
+        }
+        return relative.contains(" ") ? "\"\(relative)\"" : relative
     }
 
     /// Launches the configured agent in a new terminal tab: binds MCP and, for

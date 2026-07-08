@@ -105,7 +105,9 @@ struct TerminalDockView: View {
                 session: session,
                 font: terminalFont,
                 theme: terminalTheme,
-                shellOverride: shellOverride
+                shellOverride: shellOverride,
+                agentName: settings.agentName,
+                onSendToAgent: { workspace.sendToAgent($0) }
             )
             // Action (run) sessions just show their final output when done —
             // no "Shell exited — Restart" affordance (that's for shells/agents).

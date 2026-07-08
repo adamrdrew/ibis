@@ -10,12 +10,18 @@ import SwiftTerm
 /// (sic) every time the text-input system asks for an attributed substring —
 /// i.e. on every keystroke. Upstream returns nil after printing; the method is
 /// `open`, so that override keeps the behavior and drops the print.
-final class IbisTerminalView: LocalProcessTerminalView {
+final class IbisTerminalView: LocalProcessTerminalView, SendToAgentResponding {
     /// Called when the program rings the terminal bell (BEL). The session
     /// debounces it and turns it into a desktop notification when this terminal
     /// isn't on screen — the fallback for programs that never emit a
     /// notification escape sequence.
     var onBell: (() -> Void)?
+
+    /// Delivers this terminal's current text selection to the agent (wired by
+    /// `TerminalSessionView`).
+    var onSendToAgent: ((String) -> Void)?
+    /// Name shown in the "Send to <agent>" menu item.
+    var agentName = "Agent"
 
     private var keyWindowObserversInstalled = false
 
@@ -26,6 +32,33 @@ final class IbisTerminalView: LocalProcessTerminalView {
     override func bell(source: Terminal) {
         super.bell(source: source)
         onBell?()
+    }
+
+    /// The selected terminal text, or nil when there's no selection.
+    private var agentSelection: String? {
+        guard selectionActive, let text = getSelection(), !text.isEmpty else { return nil }
+        return text
+    }
+
+    @objc var hasAgentSelection: Bool { agentSelection != nil }
+
+    @objc func ibisSendSelectionToAgent(_ sender: Any?) {
+        guard let selection = agentSelection else { return }
+        onSendToAgent?(selection)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let baseMenu = super.menu(for: event)
+        guard agentSelection != nil else { return baseMenu }
+        let menu = baseMenu ?? NSMenu()
+        let item = NSMenuItem(
+            title: "Send to \(agentName)",
+            action: #selector(ibisSendSelectionToAgent(_:)),
+            keyEquivalent: "")
+        item.target = self
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
     }
 
     /// DEC 1004 focus reporting across *windows*. SwiftTerm sends focus in/out

@@ -27,6 +27,10 @@ struct CodeEditorView: NSViewRepresentable {
     /// A monotonically increasing token from the owning pane; when it changes,
     /// the editor takes keyboard focus (so Focus Next/Previous Editor works).
     var focusRequest: Int = 0
+    /// Display name of the configured agent, for the "Send to <agent>" menu item.
+    var agentName: String = "Agent"
+    /// Delivers the editor's current text selection to the agent.
+    var onSendToAgent: (String) -> Void = { _ in }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document)
@@ -51,6 +55,8 @@ struct CodeEditorView: NSViewRepresentable {
         textView.onAppearanceChange = { [weak coordinator = context.coordinator] in
             coordinator?.scheduleHighlight(debounced: false)
         }
+        textView.onSendToAgent = onSendToAgent
+        textView.agentName = agentName
         textView.isEditable = document.isEditable
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -116,6 +122,11 @@ struct CodeEditorView: NSViewRepresentable {
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView,
               let ruler = context.coordinator.ruler else { return }
+
+        if let editorTextView = textView as? EditorTextView {
+            editorTextView.onSendToAgent = onSendToAgent
+            editorTextView.agentName = agentName
+        }
 
         var needsHighlight = false
         // The buffer is shared, so a *programmatic* replacement (load, revert,
@@ -495,9 +506,13 @@ struct CodeEditorView: NSViewRepresentable {
 /// An `NSTextView` that reports when it becomes first responder (so the owning
 /// pane can mark itself active) and when its effective appearance changes (so
 /// the editor can re-highlight for the light/dark theme).
-final class EditorTextView: NSTextView {
+final class EditorTextView: NSTextView, SendToAgentResponding {
     var onActivate: (() -> Void)?
     var onAppearanceChange: (() -> Void)?
+    /// Delivers the current text selection to the agent (wired by `CodeEditorView`).
+    var onSendToAgent: ((String) -> Void)?
+    /// Name shown in the "Send to <agent>" menu item.
+    var agentName = "Agent"
 
     override func becomeFirstResponder() -> Bool {
         onActivate?()
@@ -510,6 +525,34 @@ final class EditorTextView: NSTextView {
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         onAppearanceChange?()
+    }
+
+    /// The selected text, or nil when the selection is empty.
+    private var agentSelection: String? {
+        let range = selectedRange()
+        guard range.length > 0 else { return nil }
+        return (string as NSString).substring(with: range)
+    }
+
+    @objc var hasAgentSelection: Bool { agentSelection != nil }
+
+    @objc func ibisSendSelectionToAgent(_ sender: Any?) {
+        guard let selection = agentSelection else { return }
+        onSendToAgent?(selection)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let baseMenu = super.menu(for: event)
+        guard agentSelection != nil else { return baseMenu }
+        let menu = baseMenu ?? NSMenu()
+        let item = NSMenuItem(
+            title: "Send to \(agentName)",
+            action: #selector(ibisSendSelectionToAgent(_:)),
+            keyEquivalent: "")
+        item.target = self
+        menu.insertItem(item, at: 0)
+        menu.insertItem(.separator(), at: 1)
+        return menu
     }
 }
 

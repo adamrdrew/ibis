@@ -281,6 +281,7 @@ struct WorkspaceView: View {
         }
         .task(id: ref) {
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
+            workspace.settings = settings
             self.workspace = workspace
             MCPBridge.shared.register(workspace)
             await workspace.rootNode.loadChildren()

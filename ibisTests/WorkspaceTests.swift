@@ -36,6 +36,38 @@ import Foundation
         }
     }
 
+    // MARK: Send to Agent
+
+    @Test func agentPathReferenceIsRelativeToRoot() async throws {
+        try await withWorkspace { workspace, dir in
+            let file = dir.appending(path: "src").appending(path: "main.swift")
+            #expect(workspace.agentPathReference(for: file) == "src/main.swift")
+            #expect(workspace.agentPathReference(for: dir) == ".")
+        }
+    }
+
+    @Test func agentPathReferenceQuotesPathsWithSpaces() async throws {
+        try await withWorkspace { workspace, dir in
+            let file = dir.appending(path: "my notes.txt")
+            #expect(workspace.agentPathReference(for: file) == "\"my notes.txt\"")
+        }
+    }
+
+    @Test func agentPathReferenceFallsBackToAbsoluteOutsideRoot() async throws {
+        try await withWorkspace { workspace, _ in
+            let outside = URL(fileURLWithPath: "/opt/elsewhere/file.txt")
+            #expect(workspace.agentPathReference(for: outside) == "/opt/elsewhere/file.txt")
+        }
+    }
+
+    @Test func sendToAgentIgnoresEmptyText() async throws {
+        try await withWorkspace { workspace, _ in
+            workspace.sendToAgent("")
+            #expect(workspace.terminal.sessions.isEmpty)
+            #expect(workspace.terminal.isVisible == false)
+        }
+    }
+
     @Test func singleFileWorkspaceUsesParentAsProjectRoot() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in

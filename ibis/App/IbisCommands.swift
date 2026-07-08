@@ -100,6 +100,14 @@ struct IbisCommands: Commands {
                 .disabled(workspace?.activeDocument == nil)
         }
 
+        // Edit menu addition: acts on whatever surface holds focus (editor,
+        // terminal, or file browser) via the responder chain.
+        CommandGroup(after: .pasteboard) {
+            Button("Send Selection to \(settings.agentName)") { sendSelectionToAgent() }
+                .keyboardShortcut("s", modifiers: [.control, .shift])
+                .disabled(!canSendSelectionToAgent)
+        }
+
         // Standard Edit menu Find/Replace/Spelling, routed to the focused editor.
         TextEditingCommands()
 
@@ -261,6 +269,36 @@ struct IbisCommands: Commands {
         // Same path as the toolbar button, so a menu-launched Claude gets the
         // same session pinning (and is restorable) as any other launch.
         workspace?.launchConfiguredAgent(settings: settings)
+    }
+
+    /// Routes "Send Selection to Agent" down the responder chain so it acts on
+    /// whichever surface holds focus — the editor, a terminal, or the file
+    /// browser (each conforms to `SendToAgentResponding`). No-ops when nothing
+    /// with a selection is focused.
+    private func sendSelectionToAgent() {
+        NSApp.sendAction(#selector(SendToAgentResponding.ibisSendSelectionToAgent(_:)), to: nil, from: nil)
+    }
+
+    /// Whether "Send Selection to Agent" is available: an agent is configured and
+    /// the focused surface has a selection. Reads `MenuActivation.revision` so
+    /// SwiftUI re-evaluates this the moment a menu opens (the first responder's
+    /// selection isn't otherwise observable here).
+    private var canSendSelectionToAgent: Bool {
+        _ = MenuActivation.shared.revision
+        guard workspace != nil, settings.agentCommandLine != nil else { return false }
+        return focusedResponderHasSelection
+    }
+
+    /// Walks the key window's responder chain for a surface that has a selection.
+    private var focusedResponderHasSelection: Bool {
+        var responder = NSApp.keyWindow?.firstResponder
+        while let current = responder {
+            if let sendable = current as? SendToAgentResponding {
+                return sendable.hasAgentSelection
+            }
+            responder = current.nextResponder
+        }
+        return false
     }
 
     /// Shares the active document's file, anchoring the picker to the top of the

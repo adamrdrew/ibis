@@ -490,6 +490,8 @@ struct FileOutlineView: NSViewRepresentable {
                 menu.addItem(menuItem("Copy Path", #selector(copyPath)))
                 menu.addItem(menuItem("Copy Name", #selector(copyName)))
                 menu.addItem(menuItem("Share…", #selector(share)))
+                let agentName = workspace.settings?.agentName ?? "Agent"
+                menu.addItem(menuItem("Send to \(agentName)", #selector(sendContextNodeToAgent)))
                 menu.addItem(.separator())
                 menu.addItem(menuItem("Copy", #selector(copyItems)))
                 menu.addItem(menuItem("Cut", #selector(cutItems)))
@@ -568,6 +570,21 @@ struct FileOutlineView: NSViewRepresentable {
 
         @objc private func copyName() {
             if let node = contextNode { FileOperations.copyToPasteboard(node.name) }
+        }
+
+        /// Right-click "Send to <agent>": sends the clicked node's path.
+        @objc private func sendContextNodeToAgent() {
+            if let node = contextNode { deliverToAgent(node) }
+        }
+
+        /// Menu-bar command / ⌃⇧S routed from `TreeOutlineView`: sends the
+        /// currently selected node's path.
+        func sendSelectionToAgent() {
+            if let node = selectedFileNode { deliverToAgent(node) }
+        }
+
+        private func deliverToAgent(_ node: FileNode) {
+            workspace.sendToAgent(workspace.agentPathReference(for: node.url))
         }
 
         @objc private func share() {
@@ -694,7 +711,7 @@ extension FileOutlineView.Coordinator: QLPreviewPanelDataSource, QLPreviewPanelD
 /// `NSOutlineView` subclass that supplies a per-row context menu, starts a
 /// rename on Return, and vends the selected file to Services / macOS
 /// intelligence.
-final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemValidation {
+final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemValidation, SendToAgentResponding {
     weak var coordinator: FileOutlineView.Coordinator?
 
     private var selectedNode: FileNode? {
@@ -706,6 +723,10 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
     @objc func copy(_ sender: Any?) { coordinator?.performCopy(cut: false) }
     @objc func cut(_ sender: Any?) { coordinator?.performCopy(cut: true) }
     @objc func paste(_ sender: Any?) { coordinator?.performPaste() }
+
+    // Send to Agent (menu bar / ⌃⇧S) when the tree holds focus.
+    @objc func ibisSendSelectionToAgent(_ sender: Any?) { coordinator?.sendSelectionToAgent() }
+    @objc var hasAgentSelection: Bool { coordinator?.hasSelection ?? false }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
