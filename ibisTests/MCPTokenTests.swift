@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 // @MainActor so the test closures inherit the isolation the store requires;
 // each test runs against its own throwaway defaults suite (withIsolatedDefaults).

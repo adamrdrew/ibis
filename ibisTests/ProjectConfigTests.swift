@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 @MainActor
 @Suite struct ProjectConfigTests {

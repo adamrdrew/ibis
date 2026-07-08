@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// Integration tests for the `git status` probe (`refresh()`), the seam the
 /// parser tests deliberately skip. Spawns the real `/usr/bin/git` against

@@ -33,7 +33,7 @@ jobs:
 
       # Resolve SPM dependencies up front (uses the committed Package.resolved).
       - name: Resolve Swift packages
-        run: xcodebuild -resolvePackageDependencies -project ibis.xcodeproj -scheme ibis
+        run: xcodebuild -resolvePackageDependencies -project ibis.xcodeproj -scheme Ibis
 
       - name: Run tests
         run: |
@@ -44,7 +44,7 @@ jobs:
           # enabled before it can be used".
           xcodebuild test \
             -project ibis.xcodeproj \
-            -scheme ibis \
+            -scheme Ibis \
             -destination 'platform=macOS' \
             -skipMacroValidation \
             -resultBundlePath TestResults.xcresult \

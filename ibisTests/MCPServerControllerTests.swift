@@ -1,7 +1,7 @@
 #if canImport(SwiftMCP)
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// Lifecycle integration for the embedded MCP server: binds a real listener on
 /// 127.0.0.1 with an ephemeral port. Serialized: the controller is a singleton.

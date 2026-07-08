@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 @Suite struct SyntaxHighlighterTests {
     @Test func highlightingSwiftProducesStyledRuns() async {

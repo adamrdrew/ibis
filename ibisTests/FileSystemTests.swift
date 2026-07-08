@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import AppKit
-@testable import ibis
+@testable import Ibis
 
 // MARK: - FileTreeLoader
 
