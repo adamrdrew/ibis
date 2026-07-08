@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import AppKit
-@testable import ibis
+@testable import Ibis
 
 /// Tests the terminal *models* (dock + session bookkeeping) without ever
 /// building a terminal view, so no shell process is spawned.

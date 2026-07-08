@@ -1,5 +1,5 @@
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// Shared helpers for the unit tests: throwaway temp directories and an isolated
 /// `UserDefaults` so persistence tests never touch the developer's real

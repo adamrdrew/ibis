@@ -19,6 +19,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.registerServicesMenuSendTypes([.string, .fileURL], returnTypes: [])
         // Provide the "Open in Ibis" service (declared in Info.plist NSServices).
         NSApp.servicesProvider = self
+        // Become the notification delegate so taps on an agent's desktop
+        // notification raise the right project window (auth is deferred to the
+        // first notification actually posted).
+        DesktopNotifier.shared.configure()
     }
 
     /// Services menu handler: opens the file(s)/folder(s) the user selected

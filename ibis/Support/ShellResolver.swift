@@ -27,7 +27,13 @@ enum ShellResolver {
     static func environment(extra: [String: String] = [:]) -> [String] {
         var env = ProcessInfo.processInfo.environment
         env["TERM"] = "xterm-256color"
-        env["TERM_PROGRAM"] = "Ibis"
+        // Advertise as iTerm2 so terminal-aware tools (Claude Code, etc.) enable
+        // their OSC 9 desktop-notification channel — Ibis renders those via
+        // `TerminalSession`'s OSC handlers. Ibis implements the OSC 9/777
+        // notification sequences iTerm2 supports; other iTerm2-proprietary
+        // sequences a tool might emit are simply ignored by SwiftTerm.
+        env["TERM_PROGRAM"] = "iTerm.app"
+        env["TERM_PROGRAM_VERSION"] = "3.5.0"
         if env["LANG"] == nil { env["LANG"] = "en_US.UTF-8" }
         // Project `.ibis.json` env overrides the inherited process environment.
         for (key, value) in extra { env[key] = value }

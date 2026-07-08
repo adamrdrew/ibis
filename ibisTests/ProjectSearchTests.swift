@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 @Suite struct ProjectSearchTests {
     private static let notCancelled: @Sendable () -> Bool = { false }

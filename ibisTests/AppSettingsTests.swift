@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// AppSettings persists through the standard `UserDefaults`, so every test
 /// snapshots the keys it may touch. Serialized: process-wide defaults.

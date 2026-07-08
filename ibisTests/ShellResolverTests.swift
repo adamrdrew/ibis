@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 @Suite struct ShellResolverTests {
     @Test func explicitExecutableOverrideIsHonored() {
@@ -28,7 +28,8 @@ import Foundation
     @Test func environmentSetsTerminalIdentifiers() {
         let env = ShellResolver.environment()
         #expect(env.contains("TERM=xterm-256color"))
-        #expect(env.contains("TERM_PROGRAM=Ibis"))
+        // Advertised as iTerm2 so tools enable their OSC 9 notification channel.
+        #expect(env.contains("TERM_PROGRAM=iTerm.app"))
     }
 
     @Test func environmentMergesExtraValues() {

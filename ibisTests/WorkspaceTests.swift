@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// Exercises the `Workspace` model headlessly: document caching, rename/move
 /// re-pointing, layout persistence, navigation, and the agent-edit review flow.

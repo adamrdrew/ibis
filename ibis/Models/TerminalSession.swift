@@ -53,6 +53,28 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Called when the shell process exits (used by the action runner).
     @ObservationIgnored var onExit: (() -> Void)?
 
+    /// Called when the running program explicitly requests a desktop notification
+    /// via an OSC escape sequence (OSC 777 `notify;title;body`, or iTerm2-style
+    /// OSC 9 `message`). This is the program telling us it wants the human — the
+    /// reliable, cross-terminal signal (Claude Code, Codex, Gemini CLI, …), not a
+    /// heuristic. The dock forwards it to the workspace, which shows it only when
+    /// this session isn't the one being looked at.
+    @ObservationIgnored var onNotification: ((_ title: String?, _ body: String) -> Void)?
+
+    /// Called (debounced) when the program rings the terminal bell — the
+    /// fallback attention signal for programs that never emit a notification
+    /// OSC: Gemini CLI outside its recognized terminals, Claude Code's
+    /// `terminal_bell` channel, and classic long-running CLIs.
+    @ObservationIgnored var onBell: (() -> Void)?
+
+    /// When an OSC notification was last forwarded, so the bell that rides along
+    /// with one (Claude Code's `iterm2_with_bell` sends OSC 9 + BEL back to
+    /// back) doesn't become a second, poorer desktop notification.
+    @ObservationIgnored private var notificationForwardedAt: Date?
+    /// When a bell was last forwarded, rate-limiting bell storms (a binary
+    /// `cat` to the terminal can ring hundreds of times a second).
+    @ObservationIgnored private var bellForwardedAt: Date?
+
     /// Called when the process exits naturally, with its exit code and how long
     /// it ran. Window restore uses this to detect a Claude `--resume` that failed
     /// because the old session is gone, so it can recover into a fresh session.
@@ -112,11 +134,14 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         let view = IbisTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
         view.font = font
+        let terminal = view.getTerminal()
         // Match SwiftTerm's release behavior in debug builds: `silentLog`
         // defaults to false under DEBUG, printing "Unknown OSC code: 133" for
         // every shell-integration prompt mark the shell or an agent TUI emits —
         // one console line per keystroke.
-        view.getTerminal().silentLog = true
+        terminal.silentLog = true
+        registerNotificationHandlers(on: terminal)
+        view.onBell = { [weak self] in self?.bellRang() }
         terminalView = view
         // Start the shell *after* this view-building pass: `startShell` mutates
         // observed state (title/isRunning/exitCode), which must not happen while
@@ -212,6 +237,51 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { self.title = trimmed }
+    }
+
+    /// Intercepts the OSC notification escape sequences a program uses to ask for
+    /// the human's attention, forwarding each to `onNotification`. User handlers
+    /// take precedence over SwiftTerm's built-ins, so both routes are ours:
+    ///  - **OSC 777** `notify;<title>;<body>` — the WezTerm/VTE convention.
+    ///  - **OSC 9** `<message>` — the iTerm2 convention (what Claude Code emits
+    ///    once it thinks it's in iTerm2). OSC 9 is also ConEmu's progress channel
+    ///    (`4;<state>;<pct>`), which carries no message, so those are ignored.
+    private func registerNotificationHandlers(on terminal: Terminal) {
+        terminal.registerOscHandler(code: 777) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8) else { return }
+            let parts = text.components(separatedBy: ";")
+            guard parts.count >= 3, parts[0] == "notify" else { return }
+            let title = parts[1]
+            let body = parts[2...].joined(separator: ";")
+            self?.forwardNotification(title: title.isEmpty ? nil : title, body: body)
+        }
+        terminal.registerOscHandler(code: 9) { [weak self] data in
+            guard let text = String(bytes: data, encoding: .utf8) else { return }
+            // ConEmu's extensions share OSC 9 with iTerm2-style notifications
+            // but always lead with a numeric selector (`9;4;<state>;<pct>` is
+            // the progress bar Claude Code emits each turn on newer iTerms). A
+            // leading all-digit field is never notification text, so drop it.
+            if let semi = text.firstIndex(of: ";"), semi != text.startIndex,
+               text[..<semi].allSatisfy(\.isNumber) { return }
+            let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return }
+            self?.forwardNotification(title: nil, body: body)
+        }
+    }
+
+    private func forwardNotification(title: String?, body: String) {
+        notificationForwardedAt = Date()
+        onNotification?(title, body)
+    }
+
+    /// Forwards a bell, unless it arrived on the heels of an explicit OSC
+    /// notification (the same alert, told twice) or of another bell (a storm).
+    private func bellRang() {
+        let now = Date()
+        if let recent = notificationForwardedAt, now.timeIntervalSince(recent) < 2 { return }
+        if let recent = bellForwardedAt, now.timeIntervalSince(recent) < 5 { return }
+        bellForwardedAt = now
+        onBell?()
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}

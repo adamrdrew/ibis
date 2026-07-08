@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// The editor's custom horizontal splitter: the pure width math, plus the
 /// model-side restore wiring that stages saved pane proportions. The live drag

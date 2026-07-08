@@ -1,7 +1,7 @@
 import Testing
 import Foundation
 import AppKit
-@testable import ibis
+@testable import Ibis
 
 /// Exercises the MCP bridge headlessly: token routing, workspace containment,
 /// the propose/review/apply flow (driven by resolving the pending diff the way

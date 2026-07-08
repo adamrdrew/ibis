@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import ibis
+@testable import Ibis
 
 /// Exercises the `git status --porcelain=v2 --branch` parser directly, without
 /// spawning git — the process-launch side is an untested integration seam.

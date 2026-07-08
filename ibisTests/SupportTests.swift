@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import SwiftUI
 import AppKit
-@testable import ibis
+@testable import Ibis
 
 // MARK: - WorkspaceRef
 
