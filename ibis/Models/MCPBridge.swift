@@ -66,6 +66,13 @@ final class MCPBridge {
         MCPTokenStore.token(for: workspace.rootURL)
     }
 
+    /// The project token of the workspace shown in `window`, if it is a
+    /// workspace window. Lets `DesktopNotifier` clear a window's delivered
+    /// notifications the moment the user brings it to the front themselves.
+    func token(for window: NSWindow) -> String? {
+        byToken.first { $0.value.value?.window === window }?.key
+    }
+
     /// The frontmost workspace, for the Settings UI (not for tool routing).
     var frontmostWorkspace: Workspace? {
         let live = byToken.values.compactMap(\.value)
@@ -74,6 +81,19 @@ final class MCPBridge {
             return match
         }
         return live.first
+    }
+
+    /// Brings the window of the workspace bound to `token` to the front, used
+    /// when the human taps a desktop notification an agent posted.
+    func activateWindow(for token: String) {
+        byToken[token]?.value?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Whether the workspace for `token` is the window the human is currently
+    /// looking at. False when Ibis is in the background or another Ibis window is
+    /// key — the signal for whether a `notify` also warrants a desktop ping.
+    private func isForeground(_ workspace: Workspace) -> Bool {
+        workspace.window != nil && workspace.window === NSApp.keyWindow
     }
 
     /// Records which editor last had focus, attributing it to its window's
@@ -285,9 +305,16 @@ final class MCPBridge {
     }
 
     func notify(token: String?, message: String) throws {
-        _ = try workspace(for: token)
+        let workspace = try workspace(for: token)
         bannerToken = token
         banner = message
+        // The banner only helps if the human is looking at this window. When
+        // they aren't, ping the desktop so they know to come back to it.
+        if !isForeground(workspace) {
+            DesktopNotifier.shared.post(
+                title: "Ibis — \(workspace.displayName)", body: message, token: token
+            )
+        }
     }
 
     /// Presents a blocking prompt as a sheet on the *caller's* window.
@@ -297,6 +324,15 @@ final class MCPBridge {
         // No window → no way to actually ask; failing is honest, fabricating a
         // choice (e.g. "yes" to a destructive confirmation) is not.
         guard let window = workspace.window else { throw MCPBridgeError.noWindow }
+        // The prompt is a sheet on this one window; if the human is elsewhere it
+        // would sit unnoticed, blocking the agent. Ping the desktop to draw them
+        // back — tapping it raises this window and reveals the sheet.
+        if !isForeground(workspace) {
+            DesktopNotifier.shared.post(
+                title: "Ibis — \(workspace.displayName)",
+                body: "The agent is asking: \(question)", token: token
+            )
+        }
         return await withCheckedContinuation { continuation in
             let alert = NSAlert()
             alert.messageText = "The agent is asking:"

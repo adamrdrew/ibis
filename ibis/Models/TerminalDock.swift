@@ -25,6 +25,17 @@ final class TerminalDock {
     /// Environment from the project's `.ibis.json`, merged into every session.
     var projectEnv: [String: String] = [:]
 
+    /// Called when a session's program requests a desktop notification (via an
+    /// OSC 9/777 escape sequence). The workspace sets this to show it when the
+    /// session isn't on screen.
+    @ObservationIgnored var onSessionNotification: ((_ session: TerminalSession, _ title: String?, _ body: String) -> Void)?
+
+    /// Called when a session's program rings the terminal bell (debounced by
+    /// the session). The workspace turns it into a desktop notification when
+    /// the session isn't on screen — the fallback for programs that never emit
+    /// a notification OSC.
+    @ObservationIgnored var onSessionBell: ((_ session: TerminalSession) -> Void)?
+
     init(workingDirectory: URL) {
         self.workingDirectory = workingDirectory
     }
@@ -83,6 +94,7 @@ final class TerminalDock {
         )
         // Give the freshly opened terminal/agent tab keyboard focus once built.
         if takeFocus { session.wantsFocus = true }
+        wireAttentionSignals(session)
         sessions.append(session)
         activeSessionID = session.id
         return session
@@ -107,12 +119,28 @@ final class TerminalDock {
                 role: .run,
                 extraEnvironment: projectEnv
             )
+            wireAttentionSignals(session)
             sessions.append(session)
         }
         session.onExit = { [weak self] in self?.isActionRunning = false }
         isActionRunning = true
         activeSessionID = session.id
         isVisible = true
+    }
+
+    /// Routes a session's attention signals (notification OSCs, the bell) up to
+    /// the workspace. Every session gets this, including the reusable Run tab —
+    /// a long project action finishing in a backgrounded window is exactly as
+    /// notification-worthy as an agent.
+    private func wireAttentionSignals(_ session: TerminalSession) {
+        session.onNotification = { [weak self, weak session] title, body in
+            guard let self, let session else { return }
+            self.onSessionNotification?(session, title, body)
+        }
+        session.onBell = { [weak self, weak session] in
+            guard let self, let session else { return }
+            self.onSessionBell?(session)
+        }
     }
 
     /// Closes a terminal tab, terminating its shell and selecting a neighbor.

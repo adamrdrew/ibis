@@ -224,6 +224,16 @@ final class Workspace {
         Self.registry.removeAll { $0.value == nil }
         Self.registry.append(WeakWorkspaceBox(self))
 
+        // A terminal program asking for attention (OSC 9/777, or the bell as a
+        // fallback) becomes a desktop notification when the session isn't the
+        // one being looked at.
+        terminal.onSessionNotification = { [weak self] session, title, body in
+            self?.handleTerminalNotification(session, title: title, body: body)
+        }
+        terminal.onSessionBell = { [weak self] session in
+            self?.handleTerminalBell(session)
+        }
+
         // Record in the system's Recent Documents (File ▸ Open Recent + Dock
         // menu). Every open path — menu, CLI, Finder, Services, intents — ends
         // up here, so this is the one central place to note it. Skipped under
@@ -544,7 +554,8 @@ final class Workspace {
         if settings.agentKind == .claude {
             let sid = session.agentSessionID ?? UUID().uuidString
             if let (command, resume) = MCPService.agentRelaunchCommand(
-                settings: settings, sessionID: sid, workingDirectory: projectRoot
+                settings: settings, sessionID: sid, workingDirectory: projectRoot,
+                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
             ) {
                 MCPService.bindAgent(to: self, settings: settings)
                 let restored = terminal.newSession(
@@ -604,7 +615,10 @@ final class Workspace {
             }
             disarm()
             let fresh = UUID().uuidString
-            guard let command = MCPService.launchCommand(settings: settings, sessionID: fresh) else { return }
+            guard let command = MCPService.launchCommand(
+                settings: settings, sessionID: fresh,
+                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+            ) else { return }
             MCPService.bindAgent(to: self, settings: settings)
             session.relaunch(
                 notice: "Previous \(settings.agentName) session not found — starting a new session.",
@@ -1214,7 +1228,10 @@ final class Workspace {
     /// bring back.
     func launchConfiguredAgent(settings: AppSettings) {
         let sessionID = settings.agentKind == .claude ? UUID().uuidString : nil
-        guard let command = MCPService.launchCommand(settings: settings, sessionID: sessionID) else { return }
+        guard let command = MCPService.launchCommand(
+            settings: settings, sessionID: sessionID,
+            mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+        ) else { return }
         MCPService.bindAgent(to: self, settings: settings)
         runAgent(command: command, name: settings.agentName, sessionID: sessionID)
     }
@@ -1229,13 +1246,52 @@ final class Workspace {
             MCPService.bindAgent(to: self, settings: settings)
             if settings.agentKind == .claude, let sid = session.agentSessionID,
                let (command, _) = MCPService.agentRelaunchCommand(
-                   settings: settings, sessionID: sid, workingDirectory: projectRoot
+                   settings: settings, sessionID: sid, workingDirectory: projectRoot,
+                   mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
                ) {
                 session.restart(shellOverride: shellOverride, command: command)
                 return
             }
         }
         session.restart(shellOverride: shellOverride)
+    }
+
+    /// Shows a desktop notification that a terminal program explicitly requested
+    /// (OSC 9/777) — but only when the human isn't already looking at that
+    /// session; if they are, there's nothing to call them back to (WezTerm's
+    /// "suppress from focused window", refined to the tab). The program decided
+    /// it was worth interrupting for, so this honors it for any session, using
+    /// the program's own message. A tap raises this window.
+    private func handleTerminalNotification(_ session: TerminalSession, title: String?, body: String) {
+        guard !isSessionOnScreen(session) else { return }
+        DesktopNotifier.shared.post(
+            title: title ?? "Ibis — \(displayName)",
+            body: body,
+            token: MCPBridge.shared.token(for: self)
+        )
+    }
+
+    /// A bell from a session that isn't on screen also becomes a desktop
+    /// notification — the fallback attention signal for programs that never
+    /// emit a notification OSC. The session debounces bells and swallows the
+    /// ones that ride along with an explicit OSC notification.
+    private func handleTerminalBell(_ session: TerminalSession) {
+        guard !isSessionOnScreen(session) else { return }
+        DesktopNotifier.shared.post(
+            title: "Ibis — \(displayName)",
+            body: "\(session.title) rang the terminal bell",
+            token: MCPBridge.shared.token(for: self)
+        )
+    }
+
+    /// Whether the human is plausibly looking at this session right now: its
+    /// window is key (which also implies Ibis is the active app), the dock is
+    /// showing, and the session is the dock's active tab. An agent finishing in
+    /// a background tab of the focused window still warrants a ping — the user
+    /// can't see it.
+    private func isSessionOnScreen(_ session: TerminalSession) -> Bool {
+        guard let window, window === NSApp.keyWindow else { return false }
+        return terminal.isVisible && terminal.activeSessionID == session.id
     }
 
     // MARK: - Unsaved changes

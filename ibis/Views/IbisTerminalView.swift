@@ -2,14 +2,74 @@ import AppKit
 import SwiftTerm
 
 /// The terminal view Ibis instantiates: SwiftTerm's `LocalProcessTerminalView`
-/// minus its per-keystroke debug chatter. SwiftTerm's `NSTextInputClient`
-/// conformance `print`s "Attribuetd string" (sic) every time the text-input
-/// system asks for an attributed substring — i.e. on every keystroke. Upstream
-/// returns nil after printing; the method is `open`, so this override keeps the
-/// behavior and drops the print.
+/// minus its per-keystroke debug chatter, plus the two attention signals the
+/// desktop-notification feature needs — window-level focus reporting to the
+/// program, and the bell surfaced to the session.
+///
+/// SwiftTerm's `NSTextInputClient` conformance `print`s "Attribuetd string"
+/// (sic) every time the text-input system asks for an attributed substring —
+/// i.e. on every keystroke. Upstream returns nil after printing; the method is
+/// `open`, so that override keeps the behavior and drops the print.
 final class IbisTerminalView: LocalProcessTerminalView {
+    /// Called when the program rings the terminal bell (BEL). The session
+    /// debounces it and turns it into a desktop notification when this terminal
+    /// isn't on screen — the fallback for programs that never emit a
+    /// notification escape sequence.
+    var onBell: (() -> Void)?
+
+    private var keyWindowObserversInstalled = false
+
     override func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
         nil
+    }
+
+    override func bell(source: Terminal) {
+        super.bell(source: source)
+        onBell?()
+    }
+
+    /// DEC 1004 focus reporting across *windows*. SwiftTerm sends focus in/out
+    /// only on first-responder changes — but when the user switches to another
+    /// window (or app), this view stays first responder of its now-non-key
+    /// window and no event is ever sent, so the program believes it's focused
+    /// forever. Agents rely on these events: Codex CLI defaults to "notify only
+    /// when unfocused" and assumes focused until told otherwise (it would never
+    /// notify without this), and Claude Code feeds them into its user-presence
+    /// tracking. `setTerminalFocus` no-ops unless the program enabled mode 1004,
+    /// and the events are idempotent state updates, so this doesn't try to
+    /// dedupe against SwiftTerm's own responder-driven events.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installKeyWindowObserversIfNeeded()
+        reportProgramFocus()
+    }
+
+    private func installKeyWindowObserversIfNeeded() {
+        guard !keyWindowObserversInstalled else { return }
+        keyWindowObserversInstalled = true
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(windowKeyStateChanged(_:)),
+            name: NSWindow.didBecomeKeyNotification, object: nil)
+        center.addObserver(
+            self, selector: #selector(windowKeyStateChanged(_:)),
+            name: NSWindow.didResignKeyNotification, object: nil)
+    }
+
+    @objc private func windowKeyStateChanged(_ note: Notification) {
+        guard let window, (note.object as? NSWindow) === window else { return }
+        reportProgramFocus()
+    }
+
+    /// Sends the terminal's effective keyboard focus — key window *and* first
+    /// responder — to the program. (App activation is covered too: the key
+    /// window resigns key when the app deactivates.)
+    private func reportProgramFocus() {
+        guard let window else { return }
+        let responder = window.firstResponder
+        let hasKeyboard = responder === self
+            || ((responder as? NSView)?.isDescendant(of: self) ?? false)
+        getTerminal().setTerminalFocus(window.isKeyWindow && hasKeyboard)
     }
 }
 

@@ -90,7 +90,12 @@ nonisolated final class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceP
         try await MCPBridge.shared.workspaceRootPath(token: await projectToken())
     }
 
-    /// Show a brief, non-blocking banner to the human in this window.
+    /// Get the human's attention with a short message. Ibis picks the channel
+    /// automatically: an in-window banner when they are looking at this window,
+    /// or a macOS desktop notification (that raises this window when tapped) when
+    /// they are focused elsewhere. Use it proactively — when a long task finishes,
+    /// when you are blocked and need them, or when there is a result worth a look
+    /// — so they do not have to keep checking back. Keep it to one line.
     @MCPTool(name: "notify")
     func notify(message: String) async throws -> String {
         try await MCPBridge.shared.notify(token: await projectToken(), message: message)
@@ -220,9 +225,12 @@ enum MCPService {
     - open_content(title, content, format): open rich output in a new unsaved tab. Use markdown or html when the answer is best shown as a rendered report, summary, table, or document rather than plain terminal text.
     - propose_edit and propose_patch: make code changes that the human reviews as a diff and approves before they are applied and saved.
     - ask_human(question, options): ask the human a question in their editor when it concerns what they are looking at.
+    - notify(message): get the human attention with a one-line message. Ibis shows it as an in-window banner if they are looking at this window, or as a desktop notification if they are focused on another window or app.
     - get_active_file, get_selection, get_open_tabs, get_workspace_root: see what the human is currently focused on.
 
     When the human asks to open or see a file, use open_file. When they ask for information best represented richly, build it as markdown or html and open it with open_content.
+
+    The human often runs several Ibis windows at once and steps away while you work, so call notify at the moments that matter: when you finish a task or a long-running step, when you are blocked and need their input, and when there is a result worth their attention. Do not narrate every step with it - a notification is for when you need them to come back, not a running log. You do not need to check whether the window is focused first; Ibis decides whether the notification lands as a banner or on the desktop.
     """
 
     /// The shell command to launch the configured agent, augmented with the Ibis
@@ -235,7 +243,10 @@ enum MCPService {
     /// in both cases — `--append-system-prompt` is per-invocation (Claude does
     /// not store it in the session), so a resumed conversation needs it
     /// re-injected just like a fresh one.
-    static func launchCommand(settings: AppSettings, sessionID: String? = nil, resume: Bool = false) -> String? {
+    static func launchCommand(
+        settings: AppSettings, sessionID: String? = nil, resume: Bool = false,
+        mcpConfig: String? = nil
+    ) -> String? {
         guard let base = settings.agentCommandLine else { return nil }
         guard settings.agentKind == .claude else { return base }
         // The id is interpolated into a `shell -l -c` string, so accept nothing
@@ -252,7 +263,38 @@ enum MCPService {
             let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
             command += " --append-system-prompt '" + prompt + "'"
         }
+        // Bind this project's Ibis MCP server on the command line rather than
+        // through a written .mcp.json (see claudeMCPConfig). Deliberately *not*
+        // --strict-mcp-config, so any MCP servers the user has in their own
+        // project/user config still load alongside Ibis.
+        if let mcpConfig {
+            command += " " + mcpConfig
+        }
         return command
+    }
+
+    /// The `--mcp-config '<json>'` argument that binds a Claude agent to
+    /// `workspace`'s window over the CLI — the inline alternative to writing a
+    /// per-project `.mcp.json`. Returns nil unless the agent is Claude, MCP is
+    /// enabled, and the server is actually listening (matching `bindAgent`'s
+    /// gate). The token is URL-safe base64 and the JSON has no apostrophes, so it
+    /// embeds safely in the single-quoted argument passed to `shell -l -i -c`.
+    static func claudeMCPConfig(for workspace: Workspace, settings: AppSettings) -> String? {
+        guard settings.agentKind == .claude, settings.mcpEnabled, let port = runningPort else { return nil }
+        let token = MCPBridge.shared.token(for: workspace)
+        let config: [String: Any] = [
+            "mcpServers": [
+                "ibis": [
+                    "type": "http",
+                    "url": MCPConfigWriter.serverURL(port: port),
+                    "headers": ["Authorization": "Bearer \(token)"]
+                ]
+            ]
+        ]
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes]
+        ), let json = String(data: data, encoding: .utf8) else { return nil }
+        return "--mcp-config '\(json)'"
     }
 
     /// The command to relaunch an agent tab that owns `sessionID`: `--resume`
@@ -262,10 +304,12 @@ enum MCPService {
     /// "already in use" — this picks whichever works). The single home of that
     /// rule, shared by window restore and the exited-overlay Restart.
     static func agentRelaunchCommand(
-        settings: AppSettings, sessionID: String, workingDirectory: URL
+        settings: AppSettings, sessionID: String, workingDirectory: URL, mcpConfig: String? = nil
     ) -> (command: String, resume: Bool)? {
         let resume = claudeSessionFileExists(sessionID: sessionID, workingDirectory: workingDirectory)
-        guard let command = launchCommand(settings: settings, sessionID: sessionID, resume: resume) else { return nil }
+        guard let command = launchCommand(
+            settings: settings, sessionID: sessionID, resume: resume, mcpConfig: mcpConfig
+        ) else { return nil }
         return (command, resume)
     }
 
@@ -320,6 +364,10 @@ enum MCPService {
     /// agent is automatically bound to its own window. No-op if MCP is off.
     static func bindAgent(to workspace: Workspace, settings: AppSettings) {
         guard settings.mcpEnabled, let port = runningPort else { return }
+        // Claude is bound inline on the command line (claudeMCPConfig), so no
+        // config file is written into the project for it. Other agents have no
+        // CLI-config option and still get a merged config file.
+        guard settings.agentKind != .claude else { return }
         let token = MCPBridge.shared.token(for: workspace)
         do {
             _ = try MCPConfigWriter.write(
