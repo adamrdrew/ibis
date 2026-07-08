@@ -50,6 +50,10 @@ final class AppSettings {
     var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: Key.terminalFontSize) } }
     /// Optional shell override; empty means use the user's login shell.
     var terminalShellPath: String { didSet { defaults.set(terminalShellPath, forKey: Key.terminalShellPath) } }
+    /// Terminal color themes, chosen by system appearance (mirrors the editor's
+    /// light/dark syntax themes).
+    var terminalLightTheme: String { didSet { defaults.set(terminalLightTheme, forKey: Key.terminalLightTheme) } }
+    var terminalDarkTheme: String { didSet { defaults.set(terminalDarkTheme, forKey: Key.terminalDarkTheme) } }
     // The terminal dock's size is intentionally *not* stored here: it's per
     // window (on `TerminalDock`) and persisted per workspace root. A global
     // setting made every open window resize in lockstep.
@@ -111,6 +115,8 @@ final class AppSettings {
         terminalFontName = defaults.string(forKey: Key.terminalFontName) ?? "SF Mono"
         terminalFontSize = defaults.object(forKey: Key.terminalFontSize) as? Double ?? 13
         terminalShellPath = defaults.string(forKey: Key.terminalShellPath) ?? ""
+        terminalLightTheme = defaults.string(forKey: Key.terminalLightTheme) ?? "Ibis Light"
+        terminalDarkTheme = defaults.string(forKey: Key.terminalDarkTheme) ?? "Ibis Dark"
         terminalPlacement = defaults.string(forKey: Key.terminalPlacement)
             .flatMap(TerminalPlacement.init) ?? .bottom
         agentName = defaults.string(forKey: Key.agentName) ?? "Claude"
@@ -157,6 +163,8 @@ final class AppSettings {
         static let terminalFontName = "terminal.fontName"
         static let terminalFontSize = "terminal.fontSize"
         static let terminalShellPath = "terminal.shellPath"
+        static let terminalLightTheme = "terminal.lightTheme"
+        static let terminalDarkTheme = "terminal.darkTheme"
         static let terminalPlacement = "terminal.placement"
         static let agentName = "agent.name"
         static let agentCommand = "agent.command"

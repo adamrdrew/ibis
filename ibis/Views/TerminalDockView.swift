@@ -7,10 +7,20 @@ struct TerminalDockView: View {
     let workspace: Workspace
     @Bindable var dock: TerminalDock
     @Environment(AppSettings.self) private var settings
+    @Environment(\.colorScheme) private var colorScheme
 
     private var terminalFont: NSFont {
         NSFont(name: settings.terminalFontName, size: settings.terminalFontSize)
             ?? .monospacedSystemFont(ofSize: settings.terminalFontSize, weight: .regular)
+    }
+
+    /// The color theme for the current appearance. Reading `colorScheme` here
+    /// means an appearance flip re-runs the session views' update pass, which
+    /// re-applies the theme to every live terminal.
+    private var terminalTheme: TerminalTheme {
+        let isDark = colorScheme == .dark
+        let name = isDark ? settings.terminalDarkTheme : settings.terminalLightTheme
+        return TerminalThemeCatalog.theme(named: name, isDark: isDark)
     }
 
     private var shellOverride: String? {
@@ -94,6 +104,7 @@ struct TerminalDockView: View {
             TerminalSessionView(
                 session: session,
                 font: terminalFont,
+                theme: terminalTheme,
                 shellOverride: shellOverride
             )
             // Action (run) sessions just show their final output when done —

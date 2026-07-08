@@ -123,9 +123,10 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     }
 
     /// Returns the terminal view, creating it and starting the shell on first
-    /// call. `font` and `shellOverride` come from settings (only used on the
-    /// initial build; later font changes are applied via `apply(font:)`).
-    func makeTerminalView(font: NSFont, shellOverride: String?) -> LocalProcessTerminalView {
+    /// call. `font`, `theme`, and `shellOverride` come from settings; the font
+    /// and theme are applied on the initial build and updated live afterward via
+    /// `apply(font:)` / `apply(theme:)`.
+    func makeTerminalView(font: NSFont, theme: TerminalTheme, shellOverride: String?) -> LocalProcessTerminalView {
         if let terminalView { return terminalView }
 
         // Make the mouse wheel scroll full-screen TUIs (Claude Code, less, vim…).
@@ -134,6 +135,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         let view = IbisTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
         view.font = font
+        apply(theme: theme, to: view)
         let terminal = view.getTerminal()
         // Match SwiftTerm's release behavior in debug builds: `silentLog`
         // defaults to false under DEBUG, printing "Unknown OSC code: 133" for
@@ -163,6 +165,32 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Applies a new font to the running terminal, if built.
     func apply(font: NSFont) {
         terminalView?.font = font
+    }
+
+    /// The theme currently installed on the view, so a redundant re-apply (every
+    /// SwiftUI update pass calls through) is cheap to skip.
+    @ObservationIgnored private var appliedThemeName: String?
+
+    /// Applies a color theme to the running terminal, if built. Mutates the
+    /// existing view in place — never rebuilds it — so the live process and its
+    /// scrollback survive (detaching a SwiftTerm view resets its buffer).
+    func apply(theme: TerminalTheme) {
+        guard let terminalView, theme.name != appliedThemeName else { return }
+        apply(theme: theme, to: terminalView)
+    }
+
+    private func apply(theme: TerminalTheme, to view: LocalProcessTerminalView) {
+        // `installColors` resets the palette and the native fg/bg, so it must run
+        // first; the explicit fg/bg/cursor/selection overrides then take effect.
+        if theme.hasValidPalette {
+            view.installColors(theme.ansi.map(\.swiftTermColor))
+        }
+        view.nativeBackgroundColor = theme.background.nsColor
+        view.nativeForegroundColor = theme.foreground.nsColor
+        view.caretColor = theme.cursor.nsColor
+        view.caretTextColor = theme.cursorText?.nsColor
+        view.selectedTextBackgroundColor = theme.selection.nsColor
+        appliedThemeName = theme.name
     }
 
     /// Restarts the shell in the existing view after it has exited. Pass

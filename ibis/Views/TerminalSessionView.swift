@@ -8,15 +8,20 @@ import SwiftTerm
 struct TerminalSessionView: NSViewRepresentable {
     let session: TerminalSession
     let font: NSFont
+    let theme: TerminalTheme
     let shellOverride: String?
 
     func makeNSView(context: Context) -> LocalProcessTerminalView {
-        session.makeTerminalView(font: font, shellOverride: shellOverride)
+        session.makeTerminalView(font: font, theme: theme, shellOverride: shellOverride)
     }
 
     func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {
         if nsView.font.fontName != font.fontName || nsView.font.pointSize != font.pointSize {
             session.apply(font: font)
         }
+        // Every mounted session gets this update pass, so a theme change (from
+        // Settings or a light/dark appearance flip) fans out to all live
+        // terminals; `apply(theme:)` no-ops when the theme is unchanged.
+        session.apply(theme: theme)
     }
 }

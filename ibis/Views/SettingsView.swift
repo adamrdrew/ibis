@@ -18,7 +18,7 @@ struct SettingsView: View {
                 CommandLineSettingsView()
             }
         }
-        .frame(width: 520, height: 380)
+        .frame(width: 560, height: 480)
     }
 }
 
@@ -34,9 +34,18 @@ private struct EditorSettingsView: View {
                 Picker("Light Mode", selection: $settings.lightTheme) {
                     ForEach(themeChoices, id: \.self) { Text($0).tag($0) }
                 }
+                EditorThemePreview(
+                    themeName: settings.lightTheme,
+                    fontName: settings.fontName,
+                    fontSize: settings.fontSize)
+
                 Picker("Dark Mode", selection: $settings.darkTheme) {
                     ForEach(themeChoices, id: \.self) { Text($0).tag($0) }
                 }
+                EditorThemePreview(
+                    themeName: settings.darkTheme,
+                    fontName: settings.fontName,
+                    fontSize: settings.fontSize)
             }
 
             Section("Font") {
@@ -115,6 +124,28 @@ private struct TerminalSettingsView: View {
                     Text("Right").tag(TerminalPlacement.trailing)
                 }
                 .pickerStyle(.segmented)
+            }
+
+            Section("Theme") {
+                Picker("Light Mode", selection: $settings.terminalLightTheme) {
+                    ForEach(TerminalThemeCatalog.light) { Text($0.name).tag($0.name) }
+                }
+                TerminalThemePreview(
+                    theme: TerminalThemeCatalog.theme(named: settings.terminalLightTheme, isDark: false),
+                    fontName: settings.terminalFontName,
+                    fontSize: settings.terminalFontSize)
+
+                Picker("Dark Mode", selection: $settings.terminalDarkTheme) {
+                    ForEach(TerminalThemeCatalog.dark) { Text($0.name).tag($0.name) }
+                }
+                TerminalThemePreview(
+                    theme: TerminalThemeCatalog.theme(named: settings.terminalDarkTheme, isDark: true),
+                    fontName: settings.terminalFontName,
+                    fontSize: settings.terminalFontSize)
+
+                Text("The terminal uses the light or dark theme to match the system appearance. Changes apply to open terminals immediately.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Font") {

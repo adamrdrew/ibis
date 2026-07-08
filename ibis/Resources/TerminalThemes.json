@@ -1,0 +1,227 @@
+[
+  {
+    "name": "Ibis Light",
+    "isDark": false,
+    "background": "#ffffff",
+    "foreground": "#1f2023",
+    "cursor": "#1f2023",
+    "cursorText": "#ffffff",
+    "selection": "#b3d7ff",
+    "ansi": [
+      "#000000", "#c23621", "#25a324", "#8a7d00",
+      "#2649c1", "#b52bb5", "#0f8fa0", "#5f5f5f",
+      "#818383", "#d13a1f", "#2eaa22", "#a89a00",
+      "#3355ff", "#d23ad2", "#14b0c0", "#1f2023"
+    ]
+  },
+  {
+    "name": "Ibis Dark",
+    "isDark": true,
+    "background": "#1e1e1e",
+    "foreground": "#cbcccd",
+    "cursor": "#cbcccd",
+    "cursorText": "#1e1e1e",
+    "selection": "#3a5f8a",
+    "ansi": [
+      "#000000", "#c23621", "#25bc24", "#adad27",
+      "#492ee1", "#d338d3", "#33bbc8", "#cbcccd",
+      "#818383", "#fc391f", "#31e722", "#eaec23",
+      "#5833ff", "#f935f8", "#14f0f0", "#e9ebeb"
+    ]
+  },
+  {
+    "name": "Dracula",
+    "isDark": true,
+    "background": "#282a36",
+    "foreground": "#f8f8f2",
+    "cursor": "#f8f8f2",
+    "cursorText": "#282a36",
+    "selection": "#44475a",
+    "ansi": [
+      "#21222c", "#ff5555", "#50fa7b", "#f1fa8c",
+      "#bd93f9", "#ff79c6", "#8be9fd", "#f8f8f2",
+      "#6272a4", "#ff6e6e", "#69ff94", "#ffffa5",
+      "#d6acff", "#ff92df", "#a4ffff", "#ffffff"
+    ]
+  },
+  {
+    "name": "Nord",
+    "isDark": true,
+    "background": "#2e3440",
+    "foreground": "#d8dee9",
+    "cursor": "#d8dee9",
+    "cursorText": "#2e3440",
+    "selection": "#434c5e",
+    "ansi": [
+      "#3b4252", "#bf616a", "#a3be8c", "#ebcb8b",
+      "#81a1c1", "#b48ead", "#88c0d0", "#e5e9f0",
+      "#4c566a", "#bf616a", "#a3be8c", "#ebcb8b",
+      "#81a1c1", "#b48ead", "#8fbcbb", "#eceff4"
+    ]
+  },
+  {
+    "name": "Solarized Dark",
+    "isDark": true,
+    "background": "#002b36",
+    "foreground": "#839496",
+    "cursor": "#93a1a1",
+    "cursorText": "#002b36",
+    "selection": "#073642",
+    "ansi": [
+      "#073642", "#dc322f", "#859900", "#b58900",
+      "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+      "#002b36", "#cb4b16", "#586e75", "#657b83",
+      "#839496", "#6c71c4", "#93a1a1", "#fdf6e3"
+    ]
+  },
+  {
+    "name": "Solarized Light",
+    "isDark": false,
+    "background": "#fdf6e3",
+    "foreground": "#657b83",
+    "cursor": "#586e75",
+    "cursorText": "#fdf6e3",
+    "selection": "#eee8d5",
+    "ansi": [
+      "#073642", "#dc322f", "#859900", "#b58900",
+      "#268bd2", "#d33682", "#2aa198", "#eee8d5",
+      "#002b36", "#cb4b16", "#586e75", "#657b83",
+      "#839496", "#6c71c4", "#93a1a1", "#fdf6e3"
+    ]
+  },
+  {
+    "name": "Gruvbox Dark",
+    "isDark": true,
+    "background": "#282828",
+    "foreground": "#ebdbb2",
+    "cursor": "#ebdbb2",
+    "cursorText": "#282828",
+    "selection": "#504945",
+    "ansi": [
+      "#282828", "#cc241d", "#98971a", "#d79921",
+      "#458588", "#b16286", "#689d6a", "#a89984",
+      "#928374", "#fb4934", "#b8bb26", "#fabd2f",
+      "#83a598", "#d3869b", "#8ec07c", "#ebdbb2"
+    ]
+  },
+  {
+    "name": "Gruvbox Light",
+    "isDark": false,
+    "background": "#fbf1c7",
+    "foreground": "#3c3836",
+    "cursor": "#3c3836",
+    "cursorText": "#fbf1c7",
+    "selection": "#ebdbb2",
+    "ansi": [
+      "#fbf1c7", "#cc241d", "#98971a", "#d79921",
+      "#458588", "#b16286", "#689d6a", "#7c6f64",
+      "#928374", "#9d0006", "#79740e", "#b57614",
+      "#076678", "#8f3f71", "#427b58", "#3c3836"
+    ]
+  },
+  {
+    "name": "One Dark",
+    "isDark": true,
+    "background": "#282c34",
+    "foreground": "#abb2bf",
+    "cursor": "#528bff",
+    "cursorText": "#282c34",
+    "selection": "#3e4451",
+    "ansi": [
+      "#282c34", "#e06c75", "#98c379", "#e5c07b",
+      "#61afef", "#c678dd", "#56b6c2", "#abb2bf",
+      "#5c6370", "#e06c75", "#98c379", "#e5c07b",
+      "#61afef", "#c678dd", "#56b6c2", "#ffffff"
+    ]
+  },
+  {
+    "name": "GitHub Light",
+    "isDark": false,
+    "background": "#ffffff",
+    "foreground": "#24292e",
+    "cursor": "#24292e",
+    "cursorText": "#ffffff",
+    "selection": "#c8e1ff",
+    "ansi": [
+      "#24292e", "#d73a49", "#22863a", "#b08800",
+      "#0366d6", "#5a32a3", "#1b7c83", "#6a737d",
+      "#959da5", "#cb2431", "#28a745", "#dbab09",
+      "#2188ff", "#8a63d2", "#3192aa", "#d1d5da"
+    ]
+  },
+  {
+    "name": "Tomorrow",
+    "isDark": false,
+    "background": "#ffffff",
+    "foreground": "#4d4d4c",
+    "cursor": "#4d4d4c",
+    "cursorText": "#ffffff",
+    "selection": "#d6d6d6",
+    "ansi": [
+      "#000000", "#c82829", "#718c00", "#eab700",
+      "#4271ae", "#8959a8", "#3e999f", "#4d4d4c",
+      "#8e908c", "#c82829", "#718c00", "#eab700",
+      "#4271ae", "#8959a8", "#3e999f", "#1d1f21"
+    ]
+  },
+  {
+    "name": "Tomorrow Night",
+    "isDark": true,
+    "background": "#1d1f21",
+    "foreground": "#c5c8c6",
+    "cursor": "#c5c8c6",
+    "cursorText": "#1d1f21",
+    "selection": "#373b41",
+    "ansi": [
+      "#1d1f21", "#cc6666", "#b5bd68", "#f0c674",
+      "#81a2be", "#b294bb", "#8abeb7", "#c5c8c6",
+      "#969896", "#cc6666", "#b5bd68", "#f0c674",
+      "#81a2be", "#b294bb", "#8abeb7", "#ffffff"
+    ]
+  },
+  {
+    "name": "Monokai",
+    "isDark": true,
+    "background": "#272822",
+    "foreground": "#f8f8f2",
+    "cursor": "#f8f8f0",
+    "cursorText": "#272822",
+    "selection": "#49483e",
+    "ansi": [
+      "#272822", "#f92672", "#a6e22e", "#f4bf75",
+      "#66d9ef", "#ae81ff", "#a1efe4", "#f8f8f2",
+      "#75715e", "#f92672", "#a6e22e", "#f4bf75",
+      "#66d9ef", "#ae81ff", "#a1efe4", "#f9f8f5"
+    ]
+  },
+  {
+    "name": "Ayu Dark",
+    "isDark": true,
+    "background": "#0a0e14",
+    "foreground": "#b3b1ad",
+    "cursor": "#e6b450",
+    "cursorText": "#0a0e14",
+    "selection": "#273747",
+    "ansi": [
+      "#01060e", "#ea6c73", "#91b362", "#f9af4f",
+      "#53bdfa", "#fae994", "#90e1c6", "#c7c7c7",
+      "#686868", "#f07178", "#c2d94c", "#ffb454",
+      "#59c2ff", "#ffee99", "#95e6cb", "#ffffff"
+    ]
+  },
+  {
+    "name": "Ayu Light",
+    "isDark": false,
+    "background": "#fafafa",
+    "foreground": "#5c6166",
+    "cursor": "#ff9940",
+    "cursorText": "#fafafa",
+    "selection": "#d1e4f4",
+    "ansi": [
+      "#000000", "#ff3333", "#86b300", "#f29718",
+      "#41a6d9", "#f07178", "#4dbf99", "#ffffff",
+      "#323232", "#ff6565", "#b8e532", "#ffd580",
+      "#73d0ff", "#ffa3aa", "#7ff1cb", "#ffffff"
+    ]
+  }
+]

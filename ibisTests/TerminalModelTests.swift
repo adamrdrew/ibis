@@ -195,11 +195,12 @@ import AppKit
 
         let view = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         // The same view is returned on later calls (identity is load-bearing
         // for scrollback survival).
-        #expect(session.makeTerminalView(font: .monospacedSystemFont(ofSize: 12, weight: .regular), shellOverride: nil) === view)
+        #expect(session.makeTerminalView(font: .monospacedSystemFont(ofSize: 12, weight: .regular), theme: TerminalThemeCatalog.fallbackDark, shellOverride: nil) === view)
 
         let exited = await TestSupport.waitUntil(timeout: 15) {
             session.hasStarted && !session.isRunning
@@ -233,6 +234,7 @@ import AppKit
         }
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         let exited = await TestSupport.waitUntil(timeout: 15) { fired }
@@ -251,6 +253,7 @@ import AppKit
         )
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         _ = await TestSupport.waitUntil(timeout: 15) { session.hasStarted && !session.isRunning }
@@ -276,6 +279,7 @@ import AppKit
         )
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         _ = await TestSupport.waitUntil(timeout: 15) { session.hasStarted && !session.isRunning }
@@ -301,6 +305,7 @@ import AppKit
         session.onProcessExit = { _, _ in exits += 1 }
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         _ = await TestSupport.waitUntil(timeout: 15) { exits == 1 }
@@ -316,6 +321,7 @@ import AppKit
         let session = TerminalSession(workingDirectory: URL.temporaryDirectory)
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         let started = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
@@ -333,6 +339,7 @@ import AppKit
         let session = TerminalSession(workingDirectory: URL.temporaryDirectory, title: "Original")
         let view = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
             shellOverride: "/bin/sh"
         )
         session.setTerminalTitle(source: view, title: "  fancy title  ")
