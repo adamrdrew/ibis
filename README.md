@@ -1,16 +1,22 @@
 # Ibis
 
-A lightweight, folder-oriented code editor for macOS — not an IDE.
+A lightweight, folder-oriented, agent-integrated code editor for macOS.
 
-Ibis opens a folder, gives you a fast native file tree, tabbed and split-pane
-editing with syntax highlighting, project-wide search, an integrated terminal,
-and a live Git status bar. It launches your coding agent (Claude Code, Codex,
-Antigravity) in one keystroke and lets that agent drive the editor through a
-built-in MCP server — open files, render reports, and propose edits you review
-before they touch disk.
+In the age of agentic development full featured IDEs can feel bloated. The agent
+does all of the heavy lifting: running, debugging, taking advantage of LSPs, searching
+and comparing files and diffs. A lot of the IDE surface area just isn't valuable anymore.
+Tools like Claude Code, Codex, and Antigravity have replaced the traditional IDE for
+many developers. But these tools have problems too. What if you want to edit a README or some
+docs by hand, or edit a config file, or make some minor edits and tweaks to files? These tools
+don't provide that classic IDE experience. So, you end up having a terminal window and an editor
+window open for your projects, and they don't talk to eachother.
 
-There is deliberately **no** run/debug, no LSP, and no plugin marketplace. It's
-an editor, not a workbench.
+Ibis is the code editor for the agentic age. Work with your agents and your files in a single
+light weight Mac native app. Browse files, make edits and changes, and launch your agent with 
+a single keyboard shortcut. Your agent can connect to Ibis to present complex data and reports in the
+GUI instead of dumping to the terminal. It can send you nice diff visualizations for your approval. 
+And you can get notifications from your agents if they need your attention while your focus is 
+elsewhere. 
 
 ## Features
 
