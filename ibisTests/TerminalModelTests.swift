@@ -351,4 +351,36 @@ import AppKit
         _ = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
         session.terminate()
     }
+
+    @Test func manualRenameOutranksProgramTitle() async throws {
+        let session = TerminalSession(workingDirectory: URL.temporaryDirectory, title: "Original")
+        let view = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
+            shellOverride: "/bin/sh"
+        )
+        session.setTerminalTitle(source: view, title: "program")
+        #expect(session.title == "program")
+
+        // A hand-typed name wins and pins the tab, ignoring later program titles.
+        session.rename(to: "  mine  ")
+        #expect(session.title == "mine")
+        #expect(session.hasManualName)
+        session.setTerminalTitle(source: view, title: "program2")
+        #expect(session.title == "mine")
+
+        // Clearing it reverts to the most recent program title.
+        session.clearManualName()
+        #expect(session.hasManualName == false)
+        #expect(session.title == "program2")
+
+        // A blank rename clears the manual name too.
+        session.rename(to: "again")
+        #expect(session.hasManualName)
+        session.rename(to: "   ")
+        #expect(session.hasManualName == false)
+
+        _ = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
+        session.terminate()
+    }
 }

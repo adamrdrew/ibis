@@ -106,6 +106,7 @@ struct TerminalDockView: View {
                 font: terminalFont,
                 theme: terminalTheme,
                 shellOverride: shellOverride,
+                titleMode: settings.terminalTitleMode,
                 agentName: settings.agentName,
                 onSendToAgent: { workspace.sendToAgent($0) }
             )

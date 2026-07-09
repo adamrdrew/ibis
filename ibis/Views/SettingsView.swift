@@ -126,6 +126,15 @@ private struct TerminalSettingsView: View {
                 .pickerStyle(.segmented)
             }
 
+            Section("Tab Title") {
+                Picker("Show", selection: $settings.terminalTitleMode) {
+                    ForEach(TerminalTitleMode.allCases) { Text($0.displayName).tag($0) }
+                }
+                Text("The default name for a terminal tab. A program that sets its own title (like an agent) overrides this, and you can rename a tab by double-clicking it.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Theme") {
                 Picker("Light Mode", selection: $settings.terminalLightTheme) {
                     ForEach(TerminalThemeCatalog.light) { Text($0.name).tag($0.name) }

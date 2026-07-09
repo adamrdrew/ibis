@@ -53,6 +53,9 @@ private struct TerminalTabItemView: View {
     var onClose: () -> Void
 
     @State private var isHovering = false
+    @State private var isEditing = false
+    @State private var editingText = ""
+    @FocusState private var fieldFocused: Bool
 
     var body: some View {
         HStack(spacing: 6) {
@@ -62,22 +65,36 @@ private struct TerminalTabItemView: View {
             leading
                 .frame(width: 14, height: 14)
 
-            Button(action: onSelect) {
-                HStack(spacing: 6) {
-                    Image(systemName: "terminal")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+                .font(.caption)
 
-                    Text(session.title)
-                        .lineLimit(1)
-                        .font(.callout)
-                        .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                }
-                .contentShape(Rectangle())
+            if isEditing {
+                TextField("Name", text: $editingText)
+                    .textFieldStyle(.plain)
+                    .font(.callout)
+                    .frame(minWidth: 60)
+                    .focused($fieldFocused)
+                    .onSubmit(commitRename)
+                    .onExitCommand(perform: cancelRename)
+                    .onChange(of: fieldFocused) { _, focused in
+                        // Commit on blur (click elsewhere), matching Terminal.app.
+                        if !focused && isEditing { commitRename() }
+                    }
+            } else {
+                Text(session.title)
+                    .lineLimit(1)
+                    .font(.callout)
+                    .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .contentShape(Rectangle())
+                    // Double-click renames; single click still selects. The
+                    // count-2 gesture is registered first so SwiftUI can
+                    // disambiguate it from the select tap.
+                    .onTapGesture(count: 2, perform: beginRename)
+                    .onTapGesture(perform: onSelect)
+                    .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
+                    .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
-            .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -90,6 +107,29 @@ private struct TerminalTabItemView: View {
             }
         }
         .onHover { isHovering = $0 }
+        .contextMenu {
+            Button("Rename", action: beginRename)
+            if session.hasManualName {
+                Button("Clear Custom Name", action: session.clearManualName)
+            }
+            Divider()
+            Button("Close", action: onClose)
+        }
+    }
+
+    private func beginRename() {
+        editingText = session.title
+        isEditing = true
+        fieldFocused = true
+    }
+
+    private func commitRename() {
+        session.rename(to: editingText)
+        isEditing = false
+    }
+
+    private func cancelRename() {
+        isEditing = false
     }
 
     @ViewBuilder
