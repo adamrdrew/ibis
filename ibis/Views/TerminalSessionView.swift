@@ -10,6 +10,7 @@ struct TerminalSessionView: NSViewRepresentable {
     let font: NSFont
     let theme: TerminalTheme
     let shellOverride: String?
+    var titleMode: TerminalTitleMode = .directoryPath
     var agentName: String = "Agent"
     var onSendToAgent: (String) -> Void = { _ in }
 
@@ -27,6 +28,7 @@ struct TerminalSessionView: NSViewRepresentable {
         // Settings or a light/dark appearance flip) fans out to all live
         // terminals; `apply(theme:)` no-ops when the theme is unchanged.
         session.apply(theme: theme)
+        session.apply(titleMode: titleMode)
         wireSendToAgent(nsView)
     }
 

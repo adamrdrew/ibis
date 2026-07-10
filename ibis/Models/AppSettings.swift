@@ -7,6 +7,32 @@ enum TerminalPlacement: String, CaseIterable {
     case trailing
 }
 
+/// What an integrated-terminal tab title shows when the running program hasn't
+/// set its own title (via an escape sequence) and the tab hasn't been renamed by
+/// hand — the iTerm-style configurable format, computed live from the shell's
+/// foreground process and working directory.
+enum TerminalTitleMode: String, CaseIterable, Identifiable {
+    /// The foreground job's name, e.g. `zsh`, `vim`, `npm`.
+    case activeProcess
+    /// The working directory's last path component, e.g. `ibis`.
+    case directoryName
+    /// The working directory as a home-abbreviated path, e.g. `~/Development/ibis`.
+    case directoryPath
+    /// The foreground job and directory combined, e.g. `vim — ibis`.
+    case processAndDirectory
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .activeProcess: "Active Process"
+        case .directoryName: "Working Directory"
+        case .directoryPath: "Working Directory Path"
+        case .processAndDirectory: "Process — Directory"
+        }
+    }
+}
+
 /// The coding agent the user runs, which determines the MCP config file format
 /// Ibis writes for it.
 enum AgentKind: String, CaseIterable, Identifiable {
@@ -60,6 +86,11 @@ final class AppSettings {
     /// Whether the terminal dock sits at the bottom or along the trailing edge.
     var terminalPlacement: TerminalPlacement {
         didSet { defaults.set(terminalPlacement.rawValue, forKey: Key.terminalPlacement) }
+    }
+    /// The format a terminal tab title falls back to when the running program
+    /// hasn't set its own title and the tab hasn't been manually renamed.
+    var terminalTitleMode: TerminalTitleMode {
+        didSet { defaults.set(terminalTitleMode.rawValue, forKey: Key.terminalTitleMode) }
     }
 
     // MARK: Agent
@@ -119,6 +150,8 @@ final class AppSettings {
         terminalDarkTheme = defaults.string(forKey: Key.terminalDarkTheme) ?? "Ibis Dark"
         terminalPlacement = defaults.string(forKey: Key.terminalPlacement)
             .flatMap(TerminalPlacement.init) ?? .bottom
+        terminalTitleMode = defaults.string(forKey: Key.terminalTitleMode)
+            .flatMap(TerminalTitleMode.init) ?? .directoryPath
         agentName = defaults.string(forKey: Key.agentName) ?? "Claude"
         agentCommand = defaults.string(forKey: Key.agentCommand) ?? "claude"
         agentArgs = defaults.string(forKey: Key.agentArgs) ?? ""
@@ -166,6 +199,7 @@ final class AppSettings {
         static let terminalLightTheme = "terminal.lightTheme"
         static let terminalDarkTheme = "terminal.darkTheme"
         static let terminalPlacement = "terminal.placement"
+        static let terminalTitleMode = "terminal.titleMode"
         static let agentName = "agent.name"
         static let agentCommand = "agent.command"
         static let agentArgs = "agent.args"

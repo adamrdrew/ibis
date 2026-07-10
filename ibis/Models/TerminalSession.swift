@@ -33,11 +33,33 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     var extraEnvironment: [String: String]
     /// The shell override last used, so `run`/`restart` can reuse it.
     @ObservationIgnored private var lastShellOverride: String?
-    /// Fallback tab title (before/without a title escape sequence).
+    /// Fallback tab title, used when nothing higher-priority applies (before a
+    /// shell reports anything): the action name, or the workspace folder.
     private var defaultTitle: String
 
-    /// Shown in the tab; updated live from the shell's title escape sequences.
-    var title: String
+    /// A name the user typed via Rename. Highest priority — overrides both the
+    /// program's own title and the computed format until cleared.
+    private var manualTitle: String?
+
+    /// The last title the running program set via an escape sequence (OSC 0/1/2).
+    /// This is how agent tabs (Claude Code, …) name themselves; it wins over the
+    /// computed format so those keep working as before.
+    private var programTitle: String?
+
+    /// The title computed from `titleMode` (working directory / active process),
+    /// refreshed by the polling loop while an interactive shell runs.
+    private var computedTitle: String?
+
+    /// The configured fallback format, pushed down from `AppSettings` by the view.
+    /// Feeds `computedTitle`; changing it relabels live shells.
+    @ObservationIgnored private(set) var titleMode: TerminalTitleMode = .directoryPath
+
+    /// Shown in the tab. Only ever assigned by `recomputeTitle()`, which resolves
+    /// the layered sources above by priority.
+    private(set) var title: String
+
+    /// Whether the tab currently carries a hand-typed name.
+    var hasManualName: Bool { manualTitle != nil }
     /// False once the shell process exits (until restarted).
     private(set) var isRunning = false
     /// True once the shell has been started at least once, so the "Shell exited"
@@ -85,6 +107,10 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// When the current process was started, to measure a quick failure.
     @ObservationIgnored private var startedAt: Date?
 
+    /// Polls the shell's foreground process + working directory to keep the
+    /// computed tab title fresh. Runs only while an interactive shell is alive.
+    @ObservationIgnored private var titlePollTask: Task<Void, Never>?
+
     /// Requests that this session's terminal view take keyboard focus once it is
     /// built and in a window. Set when a new terminal or agent tab is opened, so
     /// the user can start typing immediately.
@@ -118,8 +144,8 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func run(command: String, title: String, extraEnvironment: [String: String]) {
         self.command = command
         self.defaultTitle = title
-        self.title = title
         self.extraEnvironment = extraEnvironment
+        recomputeTitle()
         if let terminalView {
             if isRunning { terminate() }
             startShell(shellOverride: lastShellOverride, on: terminalView)
@@ -242,6 +268,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         guard isRunning else { return }
         isRunning = false
         exitCode = nil
+        stopTitlePolling()
         terminalView?.terminate()
         onExit?()
     }
@@ -249,7 +276,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     private func startShell(shellOverride: String?, on view: LocalProcessTerminalView) {
         let shell = ShellResolver.resolve(override: shellOverride)
         lastShellOverride = shellOverride
-        title = defaultTitle
+        // A fresh process hasn't set a title yet, and the previous run's live
+        // readings no longer apply; a manual rename is intentionally kept.
+        programTitle = nil
+        computedTitle = nil
+        recomputeTitle()
         exitCode = nil
         // For a command (agent / action), run it through an interactive login
         // shell (`-l -i -c`) so it sources the user's full profile — not just the
@@ -271,6 +302,98 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         startedAt = Date()
         isRunning = true
         hasStarted = true
+        // Read the just-forked shell once for an immediate title, then keep it
+        // fresh on a timer. (No-op for command tabs — see `startTitlePolling`.)
+        updateComputedTitle()
+        startTitlePolling()
+    }
+
+    // MARK: - Tab title
+
+    /// Sets a hand-typed name (highest priority). An empty/whitespace name clears
+    /// it, reverting to the program title or computed format.
+    func rename(to newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        manualTitle = trimmed.isEmpty ? nil : trimmed
+        recomputeTitle()
+    }
+
+    /// Drops a hand-typed name, reverting to the automatic title.
+    func clearManualName() {
+        manualTitle = nil
+        recomputeTitle()
+    }
+
+    /// Adopts a new configured format and relabels immediately. Cheap-skips when
+    /// unchanged (the view calls this on every SwiftUI update pass).
+    func apply(titleMode: TerminalTitleMode) {
+        guard self.titleMode != titleMode else { return }
+        self.titleMode = titleMode
+        updateComputedTitle()
+        recomputeTitle()
+    }
+
+    /// Resolves the layered title sources into the shown `title`.
+    private func recomputeTitle() {
+        let resolved = manualTitle ?? programTitle ?? computedTitle ?? defaultTitle
+        if title != resolved { title = resolved }
+    }
+
+    /// Reads the shell's live foreground process / working directory and rebuilds
+    /// `computedTitle` per `titleMode`. Safe to call anytime — a no-op until the
+    /// view (and its process) exist.
+    private func updateComputedTitle() {
+        guard let process = terminalView?.process else { return }
+        let fd = process.childfd
+        let shellPid = process.shellPid
+        guard fd >= 0, shellPid > 0 else { return }
+
+        func directory() -> URL {
+            TerminalProcessInfo.foregroundWorkingDirectory(childfd: fd, shellPid: shellPid) ?? workingDirectory
+        }
+
+        let value: String?
+        switch titleMode {
+        case .activeProcess:
+            value = TerminalProcessInfo.foregroundName(childfd: fd, shellPid: shellPid)
+        case .directoryName:
+            value = directory().lastPathComponent
+        case .directoryPath:
+            value = Self.abbreviatePath(directory())
+        case .processAndDirectory:
+            let name = TerminalProcessInfo.foregroundName(childfd: fd, shellPid: shellPid)
+            let dir = directory().lastPathComponent
+            value = [name, dir].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " — ")
+        }
+
+        guard let value, !value.isEmpty else { return }
+        computedTitle = value
+        recomputeTitle()
+    }
+
+    /// A filesystem URL as a home-abbreviated path (`~/Development/ibis`).
+    private static func abbreviatePath(_ url: URL) -> String {
+        (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath
+    }
+
+    /// Starts the title poll for interactive shells. Agent / action tabs
+    /// (`command != nil`) are named by their own escape titles or a fixed action
+    /// name, so they aren't polled.
+    private func startTitlePolling() {
+        titlePollTask?.cancel()
+        guard command == nil else { return }
+        titlePollTask = Task { @MainActor [weak self] in
+            while true {
+                guard let self, self.isRunning, !Task.isCancelled else { return }
+                self.updateComputedTitle()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func stopTitlePolling() {
+        titlePollTask?.cancel()
+        titlePollTask = nil
     }
 
     /// Writes a yellow notice into the terminal and re-runs the tab in the same
@@ -292,8 +415,12 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {}
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        // A blank title is ignored rather than clearing the tab (programs emit
+        // empty titles as a reset we don't want to honor mid-session).
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmed.isEmpty { self.title = trimmed }
+        guard !trimmed.isEmpty else { return }
+        programTitle = trimmed
+        recomputeTitle()
     }
 
     /// Intercepts the OSC notification escape sequences a program uses to ask for
@@ -348,6 +475,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         guard isRunning else { return }
         self.exitCode = exitCode
         isRunning = false
+        stopTitlePolling()
         let ranFor = startedAt.map { Date().timeIntervalSince($0) } ?? .infinity
         onExit?()
         onProcessExit?(exitCode, ranFor)
