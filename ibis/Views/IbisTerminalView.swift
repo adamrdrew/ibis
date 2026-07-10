@@ -23,6 +23,18 @@ final class IbisTerminalView: LocalProcessTerminalView, SendToAgentResponding {
     /// Name shown in the "Send to <agent>" menu item.
     var agentName = "Agent"
 
+    /// When set, a plain Return pressed while this terminal has keyboard focus
+    /// runs this instead of reaching the (dead) PTY — the session wires it while
+    /// its process is exited, so Return triggers the "Shell exited — Restart"
+    /// affordance. Returns whether it handled the key; `false` lets the event
+    /// fall through. Scoped to *this view's* first-responder status, unlike a
+    /// window-global `.keyboardShortcut(.return)`, so the editor's Return is
+    /// never hijacked. SwiftTerm marks `keyDown` `public`, not `open` (same as
+    /// `scrollWheel`), so this is delivered via a local event monitor.
+    var returnKeyAction: (() -> Bool)? {
+        didSet { if returnKeyAction != nil { TerminalReturnKeyFix.installIfNeeded() } }
+    }
+
     private var keyWindowObserversInstalled = false
 
     override func attributedSubstring(forProposedRange range: NSRange, actualRange: NSRangePointer?) -> NSAttributedString? {
@@ -103,6 +115,49 @@ final class IbisTerminalView: LocalProcessTerminalView, SendToAgentResponding {
         let hasKeyboard = responder === self
             || ((responder as? NSView)?.isDescendant(of: self) ?? false)
         getTerminal().setTerminalFocus(window.isKeyWindow && hasKeyboard)
+    }
+}
+
+/// Routes a plain Return pressed in an *exited* terminal to its restart
+/// affordance (`IbisTerminalView.returnKeyAction`). A subclass can't intercept
+/// this in `keyDown` — SwiftTerm declares it `public`, not `open` — so a local
+/// monitor checks whether the key window's first responder sits inside an
+/// `IbisTerminalView` that wants the key. Focus-scoped by construction: Return
+/// anywhere else (editor, file tree, a live terminal) is untouched.
+@MainActor
+enum TerminalReturnKeyFix {
+    private static let returnKeyCode: UInt16 = 36
+
+    /// Retains the installed monitor for the app's lifetime.
+    private static var monitor: Any?
+
+    /// Installs the key monitor once. Safe to call repeatedly.
+    static func installIfNeeded() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Local monitors are delivered on the main thread.
+            MainActor.assumeIsolated { handle(event) } ? nil : event
+        }
+    }
+
+    /// Handles a key press. Returns whether it was consumed.
+    private static func handle(_ event: NSEvent) -> Bool {
+        guard event.keyCode == returnKeyCode,
+              event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+              let responder = event.window?.firstResponder as? NSView,
+              let terminalView = enclosingIbisTerminalView(responder),
+              let action = terminalView.returnKeyAction else { return false }
+        return action()
+    }
+
+    /// Walks up from the responder to the enclosing Ibis terminal view, if any.
+    private static func enclosingIbisTerminalView(_ view: NSView) -> IbisTerminalView? {
+        var current: NSView? = view
+        while let node = current {
+            if let terminalView = node as? IbisTerminalView { return terminalView }
+            current = node.superview
+        }
+        return nil
     }
 }
 

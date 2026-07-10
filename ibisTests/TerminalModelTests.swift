@@ -131,6 +131,45 @@ import AppKit
         dock.stopAction()
         #expect(dock.isActionRunning == false)
     }
+
+    @Test func extraLaunchEnvironmentMergesOverProjectEnv() {
+        let dock = makeDock()
+        dock.projectEnv = ["SHARED": "project", "PROJECT_ONLY": "1"]
+        dock.extraLaunchEnvironment = ["SHARED": "adhoc", "IBIS_MCP_TOKEN": "tok"]
+        #expect(dock.launchEnvironment == [
+            "SHARED": "adhoc", "PROJECT_ONLY": "1", "IBIS_MCP_TOKEN": "tok",
+        ])
+
+        // New sessions and the reusable Run tab both get the merged env.
+        let session = dock.newSession()
+        #expect(session.extraEnvironment == dock.launchEnvironment)
+        dock.runAction(name: "Build", command: "make build")
+        #expect(dock.runSession?.extraEnvironment == dock.launchEnvironment)
+        dock.stopAction()
+    }
+
+    @Test func runActionUsesTheCurrentShellOverride() {
+        let dock = makeDock()
+        var configuredShell: String? = "/bin/zsh"
+        dock.shellOverrideProvider = { configuredShell }
+
+        dock.runAction(name: "Build", command: "make build")
+        #expect(dock.runSession?.lastShellOverride == "/bin/zsh")
+        dock.stopAction()
+
+        // The user changes the shell path in Settings; a re-run must pick up
+        // the new value, not the one frozen at the first launch.
+        configuredShell = "/bin/fish"
+        dock.runAction(name: "Build", command: "make build")
+        #expect(dock.runSession?.lastShellOverride == "/bin/fish")
+        dock.stopAction()
+
+        // Clearing the setting means "no override" (default shell resolution).
+        configuredShell = nil
+        dock.runAction(name: "Build", command: "make build")
+        #expect(dock.runSession?.lastShellOverride == nil)
+        dock.stopAction()
+    }
 }
 
 @MainActor
@@ -152,10 +191,13 @@ import AppKit
 
     @Test func runBeforeViewBuildJustRetargets() {
         let session = TerminalSession(workingDirectory: URL(filePath: "/tmp"), role: .run)
-        session.run(command: "make", title: "Build", extraEnvironment: ["A": "1"])
+        session.run(command: "make", title: "Build", extraEnvironment: ["A": "1"], shellOverride: "/bin/fish")
         #expect(session.title == "Build")
         #expect(session.command == "make")
         #expect(session.extraEnvironment == ["A": "1"])
+        // The override is recorded even before the view exists, so the later
+        // start (and `relaunch`) uses the settings value current at run time.
+        #expect(session.lastShellOverride == "/bin/fish")
         // No view yet, so nothing started.
         #expect(session.isRunning == false)
         #expect(session.terminalView == nil)
@@ -317,6 +359,32 @@ import AppKit
         #expect(reran, "relaunch should run the command again in the same view")
     }
 
+    @Test func commandTabTitleIsNotClobberedByTheComputedTitle() async throws {
+        // A Run-action tab is named by its action ("Build") or its own escape
+        // titles — the computed cwd/shell title must never overwrite it (make/
+        // npm emit no OSC titles, so the wrong title would stick forever).
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "sleep 30",
+            title: "Build",
+            role: .run
+        )
+        _ = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
+            shellOverride: "/bin/sh"
+        )
+        let started = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
+        #expect(started)
+        #expect(session.title == "Build")
+
+        // A title-mode change must not seed a computed title for it either.
+        session.apply(titleMode: .activeProcess)
+        #expect(session.title == "Build")
+        session.terminate()
+        #expect(session.title == "Build")
+    }
+
     @Test func interactiveShellStartsAndTerminates() async throws {
         let session = TerminalSession(workingDirectory: URL.temporaryDirectory)
         _ = session.makeTerminalView(
@@ -333,6 +401,62 @@ import AppKit
         #expect(session.isRunning == false)
         #expect(session.exitCode == nil) // terminate settles synchronously, no code
         #expect(exited)
+    }
+
+    @Test func exitedShellArmsTheReturnKeyRestartHook() async throws {
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 0",
+            title: "Claude",
+            role: .agent
+        )
+        var restartRequests = 0
+        session.onRestartRequest = { restartRequests += 1; return true }
+        let view = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
+            shellOverride: "/bin/sh"
+        ) as? IbisTerminalView
+        #expect(view != nil)
+
+        let exited = await TestSupport.waitUntil(timeout: 15) {
+            session.hasStarted && !session.isRunning
+        }
+        #expect(exited)
+        // Dead shell → plain Return in the terminal is intercepted and routed
+        // to the restart request (the focus-scoped replacement for the old
+        // window-global .keyboardShortcut(.return), which hijacked the editor).
+        #expect(view?.returnKeyAction != nil)
+        #expect(view?.returnKeyAction?() == true)
+        #expect(restartRequests == 1)
+
+        // Restarting disarms the hook while the process is alive again.
+        session.restart(shellOverride: "/bin/sh", command: "sleep 30")
+        let running = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
+        #expect(running)
+        #expect(view?.returnKeyAction == nil)
+        session.terminate()
+    }
+
+    @Test func runTabsNeverArmTheReturnKeyRestartHook() async throws {
+        // Action tabs have no "Shell exited — Restart" affordance, so Return
+        // must not restart them either.
+        let session = TerminalSession(
+            workingDirectory: URL.temporaryDirectory,
+            command: "exit 0",
+            title: "Build",
+            role: .run
+        )
+        let view = session.makeTerminalView(
+            font: .monospacedSystemFont(ofSize: 12, weight: .regular),
+            theme: TerminalThemeCatalog.fallbackDark,
+            shellOverride: "/bin/sh"
+        ) as? IbisTerminalView
+        let exited = await TestSupport.waitUntil(timeout: 15) {
+            session.hasStarted && !session.isRunning
+        }
+        #expect(exited)
+        #expect(view?.returnKeyAction == nil)
     }
 
     @Test func titleEscapeSequencesUpdateTheTabTitle() async throws {

@@ -31,8 +31,10 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     private(set) var command: String?
     /// Extra environment (from the project's `.ibis.json`) merged into the shell.
     var extraEnvironment: [String: String]
-    /// The shell override last used, so `run`/`restart` can reuse it.
-    @ObservationIgnored private var lastShellOverride: String?
+    /// The shell override last used (or queued by `run` before the view exists),
+    /// so `relaunch` can reuse it. Readable so tests can verify that re-runs
+    /// pick up the *current* settings override rather than a frozen one.
+    @ObservationIgnored private(set) var lastShellOverride: String?
     /// Fallback tab title, used when nothing higher-priority applies (before a
     /// shell reports anything): the action name, or the workspace folder.
     private var defaultTitle: String
@@ -74,6 +76,14 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
     /// Called when the shell process exits (used by the action runner).
     @ObservationIgnored var onExit: (() -> Void)?
+
+    /// Asks the owner to restart this exited session with the *current*
+    /// settings. Wired by `TerminalDockView`, which gates on the dock being
+    /// visible and this tab being the active one — so a stray Return can never
+    /// restart a hidden terminal. Returns whether the restart was performed;
+    /// a declined request lets the key event fall through instead of being
+    /// swallowed.
+    @ObservationIgnored var onRestartRequest: (() -> Bool)?
 
     /// Called when the running program explicitly requests a desktop notification
     /// via an OSC escape sequence (OSC 777 `notify;title;body`, or iTerm2-style
@@ -141,14 +151,18 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
     /// Runs a command in this (reusable) session, replacing any running process.
     /// Used by the project action runner so all actions share one Run tab.
-    func run(command: String, title: String, extraEnvironment: [String: String]) {
+    /// `shellOverride` is the *current* Settings shell path (nil for none) —
+    /// passed in rather than reusing `lastShellOverride`, which is frozen at the
+    /// first launch and would ignore a shell path changed in Settings since.
+    func run(command: String, title: String, extraEnvironment: [String: String], shellOverride: String?) {
         self.command = command
         self.defaultTitle = title
         self.extraEnvironment = extraEnvironment
+        lastShellOverride = shellOverride
         recomputeTitle()
         if let terminalView {
             if isRunning { terminate() }
-            startShell(shellOverride: lastShellOverride, on: terminalView)
+            startShell(shellOverride: shellOverride, on: terminalView)
         }
         // If the view isn't built yet, makeTerminalView starts `command` on build.
     }
@@ -269,6 +283,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         isRunning = false
         exitCode = nil
         stopTitlePolling()
+        syncReturnKeyInterception()
         terminalView?.terminate()
         onExit?()
     }
@@ -302,10 +317,26 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         startedAt = Date()
         isRunning = true
         hasStarted = true
+        syncReturnKeyInterception()
         // Read the just-forked shell once for an immediate title, then keep it
-        // fresh on a timer. (No-op for command tabs — see `startTitlePolling`.)
+        // fresh on a timer. (Both are no-ops for command tabs — see the guards
+        // in `updateComputedTitle` / `startTitlePolling`.)
         updateComputedTitle()
         startTitlePolling()
+    }
+
+    /// Keeps the terminal view's plain-Return interception in step with the
+    /// process state: while the tab shows the "Shell exited — Restart" overlay
+    /// (never for `.run` tabs, which have no restart affordance), Return in the
+    /// dead terminal requests a restart instead of feeding the dead PTY. The
+    /// overlay's button deliberately has no window-global keyboard shortcut —
+    /// that would hijack Return from the editor.
+    private func syncReturnKeyInterception() {
+        guard let view = terminalView as? IbisTerminalView else { return }
+        let showsRestartAffordance = hasStarted && !isRunning && role != .run
+        view.returnKeyAction = showsRestartAffordance
+            ? { [weak self] in self?.onRestartRequest?() ?? false }
+            : nil
     }
 
     // MARK: - Tab title
@@ -341,8 +372,12 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
     /// Reads the shell's live foreground process / working directory and rebuilds
     /// `computedTitle` per `titleMode`. Safe to call anytime — a no-op until the
-    /// view (and its process) exist.
+    /// view (and its process) exist, and *always* a no-op for command tabs
+    /// (agents/actions): those are named by their own escape titles or a fixed
+    /// action name, and a computed cwd/shell title would clobber e.g. a Run
+    /// tab's "Build" forever (make/npm never emit OSC titles).
     private func updateComputedTitle() {
+        guard command == nil else { return }
         guard let process = terminalView?.process else { return }
         let fd = process.childfd
         let shellPid = process.shellPid
@@ -476,6 +511,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         self.exitCode = exitCode
         isRunning = false
         stopTitlePolling()
+        syncReturnKeyInterception()
         let ranFor = startedAt.map { Date().timeIntervalSince($0) } ?? .infinity
         onExit?()
         onProcessExit?(exitCode, ranFor)

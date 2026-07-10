@@ -130,6 +130,30 @@ final class Workspace {
     }
 
     func applyProposedEdit(url: URL, content: String, replacing expectedCurrent: String) async -> ApplyEditOutcome {
+        // A proposal against a file that doesn't exist (and isn't an open buffer)
+        // is a *creation*: the human just approved an all-added diff, so write
+        // the file and open it. Routing it through `loadIfNeeded` instead would
+        // fail after approval with a misleading "read-only or binary" error and
+        // cache a permanently broken document for the tab.
+        if openedDocument(for: url) == nil,
+           !FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {
+            guard expectedCurrent.isEmpty else { return .staleContent }
+            do {
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                return .notWritable
+            }
+            let document = document(for: url)
+            await document.loadIfNeeded()
+            layout.activePane?.open(document)
+            await reloadDirectory(at: url.deletingLastPathComponent())
+            return .applied
+        }
+
         let document = document(for: url)
         await document.loadIfNeeded()
         guard document.isEditable else { return .notWritable }
@@ -209,11 +233,14 @@ final class Workspace {
             && !WorkspaceTrust.hasDecision(terminalRoot)
             && projectConfig.hasExecutableContent
 
-        if isDirectory {
-            watcher = FileSystemWatcher(path: rootURL.path(percentEncoded: false)) { [weak self] paths in
-                Task { @MainActor in
-                    await self?.handleFileSystemChanges(paths)
-                }
+        // Watch the folder — or, for a single-file workspace, its enclosing
+        // folder — so external changes still reconcile open buffers and refresh
+        // Git status. Without a watcher, a file opened directly never noticed a
+        // `git checkout` (even one run in its own integrated terminal) and ⌘S
+        // would silently clobber the on-disk change.
+        watcher = FileSystemWatcher(path: (isDirectory ? rootURL : terminalRoot).path(percentEncoded: false)) { [weak self] events in
+            Task { @MainActor in
+                await self?.handleFileSystemChanges(events)
             }
         }
 
@@ -261,7 +288,7 @@ final class Workspace {
     }
 
     /// Reloads the loaded directory nodes affected by filesystem changes.
-    private func handleFileSystemChanges(_ paths: [String]) async {
+    private func handleFileSystemChanges(_ events: [FileSystemWatcher.Event]) async {
         // Any change on disk (including inside .git — commits, branch switches,
         // staging) may affect Git status, so refresh it too.
         git.refresh()
@@ -270,14 +297,47 @@ final class Workspace {
         await reconcileOpenDocuments()
 
         var reloaded = Set<URL>()
-        for path in paths {
-            let directory = URL(filePath: path).standardizedFileURL
+        for event in events {
+            let directory = URL(filePath: event.path).standardizedFileURL
+            if event.mustScanSubDirs {
+                // Coalesced/dropped events: everything below this path may have
+                // changed, so refresh the whole loaded subtree — reloading just
+                // the immediate children would leave every expanded descendant
+                // directory stale until manually collapsed and re-expanded.
+                await reloadLoadedSubtree(under: directory)
+                continue
+            }
             guard !reloaded.contains(directory),
                   let node = loadedDirectoryNode(matching: directory) else { continue }
             reloaded.insert(directory)
             await node.reloadChildrenMerging()
             onDirectoryReloaded?(node)
             if node === rootNode { refreshRootEmptiness() }
+        }
+    }
+
+    /// Reloads every already-loaded directory at or below `directory`. A
+    /// `MustScanSubDirs` path can also be an *ancestor* of the watch root (the
+    /// kernel reports the deepest common parent it kept), so that case rescans
+    /// from the root node.
+    private func reloadLoadedSubtree(under directory: URL) async {
+        let target = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPath = rootNode.url.resolvingSymlinksInPath().standardizedFileURL.path
+        let start: FileNode?
+        if rootPath == target || rootPath.hasPrefix(target + "/") {
+            start = rootNode
+        } else {
+            start = loadedDirectoryNode(matching: directory)
+        }
+        guard let start, start.isDirectory else { return }
+
+        var stack = [start]
+        while let node = stack.popLast() {
+            guard node.isLoaded else { continue }
+            await node.reloadChildrenMerging()
+            onDirectoryReloaded?(node)
+            if node === rootNode { refreshRootEmptiness() }
+            stack.append(contentsOf: (node.children ?? []).filter { $0.isDirectory && $0.isLoaded })
         }
     }
 
@@ -499,16 +559,20 @@ final class Workspace {
             panes.append(pane)
         }
 
-        panes = panes.filter { !$0.tabDocuments.isEmpty }
-        guard !panes.isEmpty else { return }
-        layout.panes = panes
-        let activeIndex = min(max(0, state.activePaneIndex), panes.count - 1)
-        layout.activePaneID = panes[activeIndex].id
+        let surviving = panes.enumerated().filter { !$0.element.tabDocuments.isEmpty }
+        guard !surviving.isEmpty else { return }
+        layout.panes = surviving.map(\.element)
+        // Remap the persisted active index through the filter: it indexes the
+        // *original* pane list, so a pane dropped above it (all files missing)
+        // would otherwise shift activation onto the wrong survivor.
+        let requested = min(max(0, state.activePaneIndex), panes.count - 1)
+        let activePosition = surviving.lastIndex { $0.offset <= requested } ?? 0
+        layout.activePaneID = surviving[activePosition].element.id
 
         // Saved pane widths only make sense if every pane survived (missing
         // files can drop panes above); the splitter reads these fractions to lay
         // the restored panes out at their saved proportions.
-        if let fractions = state.paneWidthFractions, fractions.count == panes.count {
+        if let fractions = state.paneWidthFractions, fractions.count == surviving.count {
             paneWidthFractions = fractions
         }
     }
@@ -662,7 +726,12 @@ final class Workspace {
             loc = NSMaxRange(ns.lineRange(for: NSRange(location: loc, length: 0)))
             line += 1
         }
-        document.pendingSelection = ns.lineRange(for: NSRange(location: min(loc, ns.length - 1), length: 0))
+        // `loc == length` means the walk ran off the end: the line range *at*
+        // the end position resolves both cases — the trailing empty line of a
+        // newline-terminated file (caret at the very end, `{length, 0}`) and a
+        // past-EOF request in an unterminated file (the last real line). The
+        // old `length - 1` clamp could never reach that empty last line.
+        document.pendingSelection = ns.lineRange(for: NSRange(location: min(loc, ns.length), length: 0))
     }
 
     /// Opens (or focuses) the file at `url` as a tab in the active pane. Used by
@@ -987,6 +1056,21 @@ final class Workspace {
         if pane.tabDocuments.isEmpty && layout.panes.count > 1 {
             layout.closePane(pane.id)
         }
+        evictIfUnreferenced(document)
+    }
+
+    /// Drops a cleanly-closed document from the cache once no pane shows it.
+    /// Without eviction the cache grows for the window's lifetime — every closed
+    /// file's text storage and undo stack stay alive, and each FSEvents batch
+    /// stats (and re-reads when changed) files that aren't open anywhere. Dirty
+    /// documents are kept: the guarded close path either saves first or discards
+    /// explicitly via `discardDocument`.
+    private func evictIfUnreferenced(_ document: OpenDocument) {
+        guard !document.isDirty,
+              let url = document.url,
+              !layout.panes.contains(where: { pane in pane.tabDocuments.contains { $0.id == document.id } })
+        else { return }
+        documentCache.removeValue(forKey: cacheKey(url))
     }
 
     private func isOpenElsewhere(_ document: OpenDocument, excluding pane: EditorPane) -> Bool {
@@ -1127,16 +1211,44 @@ final class Workspace {
     /// Drives the proactive "add Ibis to your MCP config?" prompt in the window.
     var mcpAdoptionOffer = false
 
+    /// Drives the "modernize the hardcoded Ibis MCP entry?" prompt in the window.
+    var mcpUpgradeOffer = false
+
     /// Decides whether to proactively offer to add Ibis to this project's
-    /// existing agent MCP config. Fires only when the agent feature is on, the
-    /// project already has an MCP config that lacks the Ibis entry, and the user
-    /// hasn't declined before. Skipped while a trust decision is pending so two
-    /// prompts don't stack on the same window.
+    /// existing agent MCP config — or, when an Ibis entry exists but is the
+    /// legacy *hardcoded* form (inline token/port), to modernize it. Fires only
+    /// when the agent feature is on and the user hasn't declined that offer
+    /// before. Skipped while a trust decision is pending so two prompts don't
+    /// stack on the same window. (The two offers can't co-fire: a legacy entry
+    /// means Ibis is present, which suppresses the adoption offer.)
     func evaluateAgentConfigOffer(settings: AppSettings) {
         guard MCPService.isAvailable, settings.mcpEnabled else { return }
-        guard !trustPromptNeeded, !MCPAdoptionStore.hasDeclined(projectRoot) else { return }
+        guard !trustPromptNeeded else { return }
+        // A hardcoded entry leaks the writer's token if committed, and resolves
+        // only on the machine (and, with the default ephemeral port, only the
+        // app launch) that wrote it — a teammate's hand-run agent silently gets
+        // no Ibis tools. Offer to rewrite it to the portable env-var form.
+        if MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: projectRoot),
+           !MCPAdoptionStore.hasDeclinedUpgrade(projectRoot) {
+            mcpUpgradeOffer = true
+            return
+        }
+        guard !MCPAdoptionStore.hasDeclined(projectRoot) else { return }
         guard MCPConfigWriter.projectState(agent: settings.agentKind, projectRoot: projectRoot) == .missingIbis else { return }
         mcpAdoptionOffer = true
+    }
+
+    /// Rewrites the legacy hardcoded Ibis entry in `.mcp.json` to the portable
+    /// env-var form (undoing the old 0600/gitignore hardening, which no longer
+    /// applies to a secret-free file). Returns the human-readable result.
+    @discardableResult
+    func upgradeAgentConfigPortability(settings: AppSettings) throws -> String {
+        let port = MCPService.runningPort ?? settings.mcpPort
+        return try MCPConfigWriter.upgradeClaudeConfigPortability(
+            projectRoot: projectRoot,
+            port: port,
+            token: MCPBridge.shared.token(for: self)
+        ).message
     }
 
     // MARK: - Trust
@@ -1184,8 +1296,11 @@ final class Workspace {
     /// folder gets its env applied immediately; an as-yet-undecided folder whose
     /// config now carries executable content raises the trust prompt, so the
     /// user's own env/actions aren't silently withheld with no way to enable them.
-    func commitProjectSettings() {
-        try? projectConfig.save()
+    /// Throws when the write fails (read-only folder, full volume) so the sheet
+    /// can surface it — a swallowed failure looked committed, worked in memory
+    /// for the session, and silently vanished on relaunch.
+    func commitProjectSettings() throws {
+        try projectConfig.save()
         if isTrusted {
             applyProjectEnv()
         } else if projectConfig.hasExecutableContent {
@@ -1262,7 +1377,9 @@ final class Workspace {
     }
 
     /// A file/folder reference for the agent: its path relative to the workspace
-    /// root (the root itself becomes "."), double-quoted when it contains spaces.
+    /// root (the root itself becomes "."), double-quoted when it contains spaces
+    /// or quotes — an embedded `"` is backslash-escaped so the quoted token stays
+    /// well-formed rather than splitting into garbage at the agent prompt.
     func agentPathReference(for url: URL) -> String {
         let root = rootURL.standardizedFileURL.path
         let full = url.standardizedFileURL.path
@@ -1274,7 +1391,8 @@ final class Workspace {
         } else {
             relative = full
         }
-        return relative.contains(" ") ? "\"\(relative)\"" : relative
+        guard relative.contains(" ") || relative.contains("\"") else { return relative }
+        return "\"\(relative.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
     /// Launches the configured agent in a new terminal tab: binds MCP and, for

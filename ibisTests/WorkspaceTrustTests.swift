@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 @Suite(.serialized) struct WorkspaceTrustTests {
     @Test func unknownFolderHasNoDecision() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/untrusted-\(UUID().uuidString)")
             #expect(WorkspaceTrust.hasDecision(root) == false)
             #expect(WorkspaceTrust.isTrusted(root) == false)
@@ -15,7 +15,7 @@ import Foundation
     }
 
     @Test func trustingRecordsATrustedDecision() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/trusted-\(UUID().uuidString)")
             WorkspaceTrust.setTrusted(true, for: root)
             #expect(WorkspaceTrust.hasDecision(root))
@@ -24,7 +24,7 @@ import Foundation
     }
 
     @Test func distrustingRecordsADecisionButNotTrust() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/distrusted-\(UUID().uuidString)")
             WorkspaceTrust.setTrusted(false, for: root)
             #expect(WorkspaceTrust.hasDecision(root)) // so we don't re-prompt
@@ -33,7 +33,7 @@ import Foundation
     }
 
     @Test func trailingSlashMapsToSameDecision() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let path = "/tmp/canon-\(UUID().uuidString)"
             WorkspaceTrust.setTrusted(true, for: URL(filePath: path))
             // The same folder expressed with a trailing slash resolves to one key.

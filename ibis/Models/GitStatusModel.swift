@@ -32,13 +32,22 @@ final class GitStatusModel {
     }
 
     /// Recomputes Git status off the main actor, cancelling any in-flight refresh.
+    ///
+    /// The probe runs on a GCD queue, NOT `Task.detached`: `runStatus` blocks
+    /// (`waitUntilExit`, pipe drains), and blocking a *cooperative-pool* thread
+    /// is how CI deadlocked — on a small runner the pool has only a few
+    /// threads, and two wedged git probes starved the entire concurrency
+    /// runtime (no test task could ever be scheduled again). GCD global-queue
+    /// threads may block; the pool over-subscribes.
     func refresh() {
         task?.cancel()
         let root = self.root
         task = Task {
-            let info = await Task.detached(priority: .utility) {
-                Self.runStatus(root: root)
-            }.value
+            let info = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .utility).async {
+                    continuation.resume(returning: Self.runStatus(root: root))
+                }
+            }
             if Task.isCancelled { return }
             // A nil result means the probe was killed by the watchdog (indeterminate),
             // not that the folder stopped being a repo — keep the last-known status
@@ -107,7 +116,13 @@ final class GitStatusModel {
 
         process.waitUntilExit()
         watchdog.cancel()
-        group.wait()
+        // Bounded, not `group.wait()`: EOF on the pipes can lag the child's
+        // exit indefinitely when a concurrently spawned process (a PTY shell,
+        // another git) inherits the write ends before spawn marks them
+        // close-on-exec — the drain then blocks until that unrelated process
+        // dies. Give the drains a beat, then declare the probe indeterminate;
+        // the abandoned drain threads release themselves whenever EOF arrives.
+        guard group.wait(timeout: .now() + 5) == .success else { return nil }
 
         // Killed by the watchdog (or any signal): status indeterminate, don't
         // report it as "not a repository".

@@ -23,7 +23,7 @@ import Foundation
 
     // MARK: Claude (.mcp.json)
 
-    @Test func claudeWriteCreatesHardenedConfig() throws {
+    @Test func claudeWriteReferencesTheTokenViaEnvVar() throws {
         try TestSupport.withTempDir { root in
             let result = try MCPConfigWriter.write(agent: .claude, projectRoot: root, port: 4000, token: "tok123")
             let file = root.appending(path: ".mcp.json")
@@ -33,12 +33,21 @@ import Foundation
             let servers = try #require(object["mcpServers"] as? [String: Any])
             let ibis = try #require(servers["ibis"] as? [String: Any])
             #expect(ibis["type"] as? String == "http")
-            #expect(ibis["url"] as? String == "http://127.0.0.1:4000/mcp")
-            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer tok123")
-
-            // Token file is owner-only and ignored by git.
-            #expect(try permissions(of: file) == 0o600)
-            #expect(gitignore(in: root).contains(".mcp.json"))
+            // .mcp.json is Claude's project-shared config — teams commit it, and
+            // gitignore can't protect an already-tracked file. The secret AND
+            // the machine/launch-specific port stay out of the file (Claude
+            // expands ${VAR} at load), so the same bytes work on every machine
+            // and never go stale…
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
+            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            #expect(!contents.contains("tok123"))
+            #expect(!contents.contains("4000"))
+            // …and the live values are surfaced in the message for external shells.
+            #expect(result.message.contains("tok123"))
+            #expect(result.message.contains("4000"))
+            // A secret-free file must not be gitignored: teams commit it.
+            #expect(!gitignore(in: root).contains(".mcp.json"))
         }
     }
 
@@ -71,8 +80,8 @@ import Foundation
             let servers = try #require(object["mcpServers"] as? [String: Any])
             #expect(servers.count == 1)
             let ibis = try #require(servers["ibis"] as? [String: Any])
-            #expect(ibis["url"] as? String == "http://127.0.0.1:5000/mcp")
-            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer new")
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
+            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
         }
     }
 
@@ -90,12 +99,14 @@ import Foundation
 
     @Test func gitignoreAppendIsIdempotentAndAdditive() throws {
         try TestSupport.withTempDir { root in
+            // Antigravity's config still carries the raw token, so it is still
+            // gitignored (Claude's no longer holds a secret and isn't).
             try "node_modules/\n".write(to: root.appending(path: ".gitignore"), atomically: true, encoding: .utf8)
-            _ = try MCPConfigWriter.write(agent: .claude, projectRoot: root, port: 1, token: "t")
-            _ = try MCPConfigWriter.write(agent: .claude, projectRoot: root, port: 2, token: "t")
+            _ = try MCPConfigWriter.write(agent: .antigravity, projectRoot: root, port: 1, token: "t")
+            _ = try MCPConfigWriter.write(agent: .antigravity, projectRoot: root, port: 2, token: "t")
             let contents = gitignore(in: root)
             #expect(contents.hasPrefix("node_modules/\n"))
-            #expect(contents.components(separatedBy: "\n").filter { $0 == ".mcp.json" }.count == 1)
+            #expect(contents.components(separatedBy: "\n").filter { $0 == ".agents/mcp_config.json" }.count == 1)
         }
     }
 
@@ -113,6 +124,34 @@ import Foundation
             #expect(try permissions(of: file) == 0o600)
             #expect(gitignore(in: root).contains(".agents/mcp_config.json"))
         }
+    }
+
+    @Test func antigravityRefusesToWriteASecretIntoATrackedConfig() throws {
+        try TestSupport.withTempDir { root in
+            // A tracked config can't be protected by .gitignore — the write
+            // must refuse rather than stage the token for the next push.
+            let dir = root.appending(path: ".agents")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try #"{"mcpServers": {}}"#.write(to: dir.appending(path: "mcp_config.json"), atomically: true, encoding: .utf8)
+            try git(["init", "-q"], in: root)
+            try git(["add", ".agents/mcp_config.json"], in: root)
+
+            #expect(throws: (any Error).self) {
+                _ = try MCPConfigWriter.write(agent: .antigravity, projectRoot: root, port: 1, token: "secret")
+            }
+            let contents = try String(contentsOf: dir.appending(path: "mcp_config.json"), encoding: .utf8)
+            #expect(!contents.contains("secret"))
+        }
+    }
+
+    private func git(_ arguments: [String], in root: URL) throws {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/env")
+        process.arguments = ["git", "-C", root.path(percentEncoded: false)] + arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
     }
 
     // MARK: Codex (.codex/config.toml)
@@ -159,6 +198,117 @@ import Foundation
         }
     }
 
+    @Test func commentedOutCodexTableIsNotTreatedAsPresent() throws {
+        try TestSupport.withTempDir { root in
+            let dir = root.appending(path: ".codex")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let existing = """
+            # [mcp_servers.ibis]
+            # url = "http://127.0.0.1:1/mcp"
+            """
+            try existing.write(to: dir.appending(path: "config.toml"), atomically: true, encoding: .utf8)
+
+            // A substring check saw the commented header as "present": the
+            // adoption offer was suppressed forever and writes silently no-op'd
+            // while reporting success.
+            #expect(MCPConfigWriter.projectState(agent: .codex, projectRoot: root) == .missingIbis)
+
+            _ = try MCPConfigWriter.write(agent: .codex, projectRoot: root, port: 4242, token: "t")
+            let toml = try String(contentsOf: dir.appending(path: "config.toml"), encoding: .utf8)
+            // The comment survives and a real table was appended.
+            #expect(toml.contains("# [mcp_servers.ibis]"))
+            #expect(toml.components(separatedBy: "\n").contains("[mcp_servers.ibis]"))
+            #expect(toml.contains(#"url = "http://127.0.0.1:4242/mcp""#))
+            #expect(MCPConfigWriter.projectState(agent: .codex, projectRoot: root) == .ibisPresent)
+        }
+    }
+
+    @Test func codexTableHeaderWithInlineCommentIsStillReplaced() throws {
+        try TestSupport.withTempDir { root in
+            // TOML permits a comment after the header; detection and the
+            // replacement scan must agree on that or writes silently no-op.
+            let dir = root.appending(path: ".codex")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let existing = """
+            [mcp_servers.ibis]  # managed by Ibis
+            url = "http://127.0.0.1:1/mcp"
+            stale = true
+            """
+            try existing.write(to: dir.appending(path: "config.toml"), atomically: true, encoding: .utf8)
+            #expect(MCPConfigWriter.projectState(agent: .codex, projectRoot: root) == .ibisPresent)
+
+            _ = try MCPConfigWriter.write(agent: .codex, projectRoot: root, port: 4242, token: "t")
+            let toml = try String(contentsOf: dir.appending(path: "config.toml"), encoding: .utf8)
+            #expect(toml.contains(#"url = "http://127.0.0.1:4242/mcp""#))
+            #expect(!toml.contains("stale = true"))
+        }
+    }
+
+    // MARK: Legacy hardcoded-entry detection & upgrade
+
+    private func writeLegacyConfig(in root: URL, extraServer: Bool = false) throws -> URL {
+        let file = root.appending(path: ".mcp.json")
+        let other = extraServer ? #""other": {"type": "stdio", "command": "other-mcp"}, "# : ""
+        let config = """
+        {"mcpServers": {\(other)"ibis": {"type": "http", "url": "http://127.0.0.1:4000/mcp", \
+        "headers": {"Authorization": "Bearer legacy-secret"}}}, "custom": true}
+        """
+        try config.write(to: file, atomically: true, encoding: .utf8)
+        return file
+    }
+
+    @Test func detectsLegacyHardcodedIbisEntries() throws {
+        try TestSupport.withTempDir { root in
+            // No file / no ibis entry: nothing to upgrade.
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+            try #"{"mcpServers": {"other": {"type": "stdio", "command": "x"}}}"#
+                .write(to: root.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // Inline token: needs upgrade.
+            _ = try writeLegacyConfig(in: root)
+            #expect(MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // Placeholder token but literal port: still machine-specific.
+            let portOnly = #"{"mcpServers": {"ibis": {"type": "http", "url": "http://127.0.0.1:4000/mcp", "headers": {"Authorization": "Bearer ${IBIS_MCP_TOKEN}"}}}}"#
+            try portOnly.write(to: root.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
+            #expect(MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // The current portable form: nothing to do.
+            _ = try MCPConfigWriter.write(agent: .claude, projectRoot: root, port: 1, token: "t")
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+        }
+    }
+
+    @Test func upgradeRewritesTheEntryAndUndoesTheOldHardening() throws {
+        try TestSupport.withTempDir { root in
+            let file = try writeLegacyConfig(in: root, extraServer: true)
+            // Simulate the old hardening: 0600 + Ibis's own gitignore line.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try "node_modules/\n.mcp.json\n".write(to: root.appending(path: ".gitignore"), atomically: true, encoding: .utf8)
+
+            let result = try MCPConfigWriter.upgradeClaudeConfigPortability(projectRoot: root, port: 9100, token: "legacy-secret")
+
+            let object = try json(at: file)
+            let servers = try #require(object["mcpServers"] as? [String: Any])
+            let ibis = try #require(servers["ibis"] as? [String: Any])
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
+            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
+            // Other servers and unknown keys survive; the secret is gone.
+            #expect(servers["other"] != nil)
+            #expect(object["custom"] as? Bool == true)
+            #expect(!(try String(contentsOf: file, encoding: .utf8)).contains("legacy-secret"))
+            #expect(result.message.contains("legacy-secret"))
+
+            // The old hardening is undone: committable perms, gitignore line
+            // removed — but only Ibis's exact line; the user's entries stay.
+            #expect(try permissions(of: file) == 0o644)
+            let ignore = gitignore(in: root)
+            #expect(ignore.contains("node_modules/"))
+            #expect(!ignore.components(separatedBy: "\n").contains(".mcp.json"))
+        }
+    }
+
     // MARK: hardenExistingConfigs
 
     @Test func hardenFixesPermissionsOnTokenBearingConfigs() throws {
@@ -171,6 +321,21 @@ import Foundation
             MCPConfigWriter.hardenExistingConfigs(projectRoot: root)
             #expect(try permissions(of: file) == 0o600)
             #expect(gitignore(in: root).contains(".mcp.json"))
+        }
+    }
+
+    @Test func hardenLeavesEnvVarReferencesAlone() throws {
+        try TestSupport.withTempDir { root in
+            // The new-style config carries no secret — hardening must not
+            // chmod or gitignore it (teams commit .mcp.json).
+            let file = root.appending(path: ".mcp.json")
+            let config = #"{"mcpServers": {"ibis": {"type": "http", "url": "u", "headers": {"Authorization": "Bearer ${IBIS_MCP_TOKEN}"}}}}"#
+            try config.write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+
+            MCPConfigWriter.hardenExistingConfigs(projectRoot: root)
+            #expect(try permissions(of: file) == 0o644)
+            #expect(!gitignore(in: root).contains(".mcp.json"))
         }
     }
 

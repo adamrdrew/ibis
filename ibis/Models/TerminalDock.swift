@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import AppKit
 
 /// The bottom terminal dock for a workspace window: an ordered set of terminal
 /// sessions (tabs), the selected one, and whether the dock is showing. Mirrors
@@ -24,6 +25,31 @@ final class TerminalDock {
 
     /// Environment from the project's `.ibis.json`, merged into every session.
     var projectEnv: [String: String] = [:]
+
+    /// Ad-hoc environment injected into every session launched from now on, on
+    /// top of `projectEnv` (winning on key collisions) — the seam for values the
+    /// app computes at runtime rather than reads from the project config, e.g.
+    /// an `IBIS_MCP_TOKEN` for agent sessions. Already-running sessions are
+    /// unaffected.
+    var extraLaunchEnvironment: [String: String] = [:]
+
+    /// The environment handed to newly launched sessions: the project's
+    /// `.ibis.json` env plus the ad-hoc entries (which win on collisions).
+    var launchEnvironment: [String: String] {
+        projectEnv.merging(extraLaunchEnvironment) { _, adHoc in adHoc }
+    }
+
+    /// Supplies the *current* Settings shell override (nil for none) whenever a
+    /// session is (re)launched, so re-run actions pick up a shell path changed
+    /// in Settings — unlike a value captured at first launch. Wired by
+    /// `TerminalDockView`, which owns the settings access.
+    @ObservationIgnored var shellOverrideProvider: (() -> String?)?
+
+    /// The settings shell override right now (nil when none is configured or
+    /// the provider isn't wired yet).
+    private var currentShellOverride: String? {
+        shellOverrideProvider?() ?? nil
+    }
 
     /// Called when a session's program requests a desktop notification (via an
     /// OSC 9/777 escape sequence). The workspace sets this to show it when the
@@ -90,7 +116,7 @@ final class TerminalDock {
             title: title,
             role: role,
             agentSessionID: agentSessionID,
-            extraEnvironment: projectEnv
+            extraEnvironment: launchEnvironment
         )
         // Give the freshly opened terminal/agent tab keyboard focus once built.
         if takeFocus { session.wantsFocus = true }
@@ -110,18 +136,20 @@ final class TerminalDock {
         let session: TerminalSession
         if let existing = sessions.first(where: { $0.role == .run }) {
             session = existing
-            session.run(command: command, title: name, extraEnvironment: projectEnv)
         } else {
-            session = TerminalSession(
-                workingDirectory: workingDirectory,
-                command: command,
-                title: name,
-                role: .run,
-                extraEnvironment: projectEnv
-            )
+            session = TerminalSession(workingDirectory: workingDirectory, role: .run)
             wireAttentionSignals(session)
             sessions.append(session)
         }
+        // One retarget path for both branches, so a fresh Run tab records the
+        // current shell override and env exactly like a reused one (with no
+        // view yet, `run` just sets the fields; the build starts the process).
+        session.run(
+            command: command,
+            title: name,
+            extraEnvironment: launchEnvironment,
+            shellOverride: currentShellOverride
+        )
         session.onExit = { [weak self] in self?.isActionRunning = false }
         isActionRunning = true
         activeSessionID = session.id
@@ -169,6 +197,33 @@ final class TerminalDock {
         // Insert before the target when moving left, after it when moving right.
         sessions.insert(session, at: from < to ? insertion + 1 : insertion)
         return true
+    }
+
+    /// Keeps keyboard focus with the active terminal tab. Every session's view
+    /// stays mounted (hidden ones at opacity 0), so switching tabs doesn't move
+    /// first responder by itself — keystrokes would keep flowing to the hidden
+    /// tab's PTY, and its program would keep being told it's focused. Called by
+    /// `TerminalDockView` whenever `activeSessionID` changes: if focus currently
+    /// sits inside one of this dock's terminal views, it moves to the newly
+    /// active session's view (SwiftTerm's responder overrides then send the DEC
+    /// 1004 focus-out/in to the outgoing and incoming programs). Focus that's
+    /// elsewhere (editor, file tree) is never stolen.
+    func moveKeyboardFocusToActiveTerminalIfNeeded() {
+        guard let active = activeSession else { return }
+        let terminalViews = sessions.compactMap(\.terminalView)
+        guard let window = terminalViews.compactMap(\.window).first,
+              let responder = window.firstResponder else { return }
+        let focusIsInATerminal = terminalViews.contains { view in
+            responder === view || ((responder as? NSView)?.isDescendant(of: view) ?? false)
+        }
+        guard focusIsInATerminal else { return }
+        if let view = active.terminalView, view.window === window {
+            window.makeFirstResponder(view)
+        } else {
+            // The active tab's view isn't built yet (first show): have it take
+            // focus once `makeTerminalView` runs.
+            active.wantsFocus = true
+        }
     }
 
     /// Moves selection to an adjacent terminal tab, wrapping around.

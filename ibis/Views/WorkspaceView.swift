@@ -43,8 +43,14 @@ struct WorkspaceView: View {
                 MCPBannerView(text: banner)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
-                    .task(id: banner) {
+                    // Keyed on the epoch (not the text) so a repost of the same
+                    // message restarts the timer. The cancellation guard matters:
+                    // when a new banner replaces this one, `Task.sleep` throws,
+                    // `try?` swallows it, and falling through would wipe the
+                    // *new* banner a frame after it appeared.
+                    .task(id: bridge.bannerEpoch) {
                         try? await Task.sleep(for: .seconds(4))
+                        guard !Task.isCancelled else { return }
                         bridge.banner = nil
                         bridge.bannerToken = nil
                     }
@@ -57,7 +63,7 @@ struct WorkspaceView: View {
                 ProjectSettingsView(
                     config: workspace.projectConfig,
                     workspace: workspace,
-                    commit: { workspace.commitProjectSettings() },
+                    commit: { try workspace.commitProjectSettings() },
                     dismiss: { workspace.projectSettingsRequested = false }
                 )
             }
@@ -97,6 +103,24 @@ struct WorkspaceView: View {
             }
         } message: {
             Text("“\(workspace?.displayName ?? "This project")” already has an MCP configuration but doesn’t include Ibis. Add it so \(settings.agentName) can use Ibis’s tools (open files, propose edits, and more) in this window.")
+        }
+        // Legacy hardcoded Ibis entry (inline token/port) detected on open:
+        // offer to rewrite it to the portable env-var form. Declining is
+        // remembered per project.
+        .alert("Update this project’s Ibis MCP entry?", isPresented: mcpUpgradePresented) {
+            Button("Update Entry") {
+                guard let workspace else { return }
+                do {
+                    try workspace.upgradeAgentConfigPortability(settings: settings)
+                } catch {
+                    workspace.presentError("Couldn’t update the Ibis MCP entry: \(error.localizedDescription)")
+                }
+            }
+            Button("Not Now", role: .cancel) {
+                if let workspace { MCPAdoptionStore.setDeclinedUpgrade(workspace.projectRoot) }
+            }
+        } message: {
+            Text(".mcp.json points at Ibis with a hardcoded token and port, which works only on the machine that wrote it — and exposes the token if the file is committed. Ibis can rewrite the entry to use environment variables so the same file works for every developer.")
         }
     }
 
@@ -261,6 +285,10 @@ struct WorkspaceView: View {
         .onDisappear {
             if let workspace {
                 workspace.resolvePendingDiff(apply: false)
+                // Same for a blocking ask_human sheet: its completion handler
+                // never fires when the window closes, so resolve it explicitly
+                // or the agent's MCP request hangs forever.
+                MCPBridge.shared.cancelPrompts(for: workspace)
                 MCPBridge.shared.unregister(workspace)
                 // Kill this window's shells/agents/actions. Nothing else does:
                 // SwiftTerm's pending PTY read keeps each process object alive
@@ -280,10 +308,34 @@ struct WorkspaceView: View {
             }
         }
         .task(id: ref) {
+            // The sibling `.task` above also starts the MCP server, but the two
+            // tasks have no ordering guarantee. `apply` is idempotent, so kick
+            // it here too and wait for the bind to settle — otherwise a cold
+            // `ibis --agent` launch (or an agent-tab restore) can race the
+            // transport and start the agent with no Ibis tools for its whole
+            // session.
+            MCPService.apply(settings: settings)
+            await MCPService.awaitReady()
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             workspace.settings = settings
             self.workspace = workspace
             MCPBridge.shared.register(workspace)
+            // Every terminal/agent session in this window gets the project's MCP
+            // token and the server's live port: Codex reads the token via
+            // bearer_token_env_var, and a hand-run `claude` resolves both
+            // through the `${IBIS_MCP_TOKEN}` / `${IBIS_MCP_PORT}` references
+            // in .mcp.json. The env-var indirection is what makes a *committed*
+            // .mcp.json portable: the file carries nothing machine-specific, so
+            // each teammate's Ibis supplies its own values (the port is
+            // ephemeral by default — inlined, it broke the config on any other
+            // machine, and on this one after a relaunch). Inert while MCP is off.
+            if MCPService.isAvailable {
+                workspace.terminal.extraLaunchEnvironment["IBIS_MCP_TOKEN"] =
+                    MCPBridge.shared.token(for: workspace)
+                if let port = MCPService.runningPort {
+                    workspace.terminal.extraLaunchEnvironment["IBIS_MCP_PORT"] = String(port)
+                }
+            }
             await workspace.rootNode.loadChildren()
             workspace.refreshRootEmptiness()
             // Reopen the tabs/panes/selection and terminal dock from the last
@@ -433,6 +485,13 @@ struct WorkspaceView: View {
         )
     }
 
+    private var mcpUpgradePresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.mcpUpgradeOffer ?? false },
+            set: { if !$0 { workspace?.mcpUpgradeOffer = false } }
+        )
+    }
+
     private var diffReviewPresented: Binding<Bool> {
         Binding(
             get: { workspace?.pendingDiff != nil },
@@ -450,7 +509,13 @@ struct WorkspaceView: View {
     }
 
     private func launchAgent(in workspace: Workspace) {
-        workspace.launchConfiguredAgent(settings: settings)
+        Task {
+            // The MCP transport binds asynchronously (and a port change restarts
+            // it after a delay); launching before it settles reads no port and
+            // silently starts the agent without Ibis tools.
+            await MCPService.awaitReady()
+            workspace.launchConfiguredAgent(settings: settings)
+        }
     }
 
     /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
@@ -631,12 +696,17 @@ struct WorkspaceView: View {
         }
     }
 
-    private func openSearchResult(_ url: URL, _ range: NSRange) {
+    private func openSearchResult(_ url: URL, _ match: SearchMatch) {
         guard let workspace else { return }
         Task {
             let document = workspace.document(for: url)
             await document.loadIfNeeded()
-            document.pendingSelection = range
+            // The match's offsets came from the *disk* copy; in a buffer with
+            // unsaved edits they can land on arbitrary text. Re-anchor against
+            // the live buffer rather than blindly selecting the stale range.
+            document.pendingSelection = ProjectSearch.resolvedSelection(
+                for: match, in: document.text as NSString
+            )
             workspace.layout.activePane?.open(document)
         }
     }

@@ -32,8 +32,24 @@ final class MCPBridge {
     /// A transient message posted by `notify`, shown by the frontmost window.
     /// (Banners are per-window in the UI via `bannerToken`.)
     var banner: String?
-    /// The token of the workspace whose banner should show.
-    @ObservationIgnored var bannerToken: String?
+    /// The token of the workspace whose banner should show. Observed (not
+    /// `@ObservationIgnored`): when the same message text is posted to a
+    /// different window, this is the only value that changes — unobserved, no
+    /// window would re-evaluate and the banner would stay on the wrong one.
+    var bannerToken: String?
+    /// Bumped on every `notify`, so the UI restarts its auto-dismiss timer even
+    /// when the message text and token are both unchanged.
+    private(set) var bannerEpoch = 0
+
+    /// In-flight `ask_human` sheets by caller token. AppKit never invokes a
+    /// sheet's completion handler when its window closes without `endSheet`, so
+    /// window teardown resolves these explicitly via `cancelPrompts(for:)` —
+    /// otherwise the checked continuation leaks and the MCP request hangs
+    /// forever server-side.
+    private final class PendingPrompt {
+        var continuation: CheckedContinuation<String, any Error>?
+    }
+    private var pendingPrompts: [String: [PendingPrompt]] = [:]
 
     // MARK: Registry
 
@@ -308,6 +324,7 @@ final class MCPBridge {
         let workspace = try workspace(for: token)
         bannerToken = token
         banner = message
+        bannerEpoch += 1
         // The banner only helps if the human is looking at this window. When
         // they aren't, ping the desktop so they know to come back to it.
         if !isForeground(workspace) {
@@ -333,16 +350,37 @@ final class MCPBridge {
                 body: "The agent is asking: \(question)", token: token
             )
         }
-        return await withCheckedContinuation { continuation in
+        let key = token ?? ""
+        let pending = PendingPrompt()
+        pendingPrompts[key, default: []].append(pending)
+        return try await withCheckedThrowingContinuation { continuation in
+            pending.continuation = continuation
             let alert = NSAlert()
             alert.messageText = "The agent is asking:"
             alert.informativeText = question
             for button in buttons { alert.addButton(withTitle: button) }
-            alert.beginSheetModal(for: window) { response in
+            alert.beginSheetModal(for: window) { [weak self] response in
+                // Already resolved by `cancelPrompts` (the window closed).
+                guard let resumable = pending.continuation else { return }
+                pending.continuation = nil
+                self?.pendingPrompts[key]?.removeAll { $0 === pending }
                 let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
                 let choice = buttons.indices.contains(index) ? buttons[index] : buttons[0]
-                continuation.resume(returning: choice)
+                resumable.resume(returning: choice)
             }
+        }
+    }
+
+    /// Resolves every in-flight `ask_human` for a closing workspace window, so
+    /// the agent gets an honest error instead of hanging forever.
+    func cancelPrompts(for workspace: Workspace) {
+        let key = token(for: workspace)
+        guard let prompts = pendingPrompts.removeValue(forKey: key) else { return }
+        for pending in prompts {
+            pending.continuation?.resume(
+                throwing: MCPToolFailure("The window closed before the human answered.")
+            )
+            pending.continuation = nil
         }
     }
 

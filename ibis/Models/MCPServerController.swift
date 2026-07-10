@@ -126,6 +126,9 @@ final class MCPServerController {
     private(set) var startError: String?
 
     @ObservationIgnored private var transport: HTTPSSETransport?
+    /// The in-flight bind, so launch paths can await a settled state instead of
+    /// racing it (see `waitUntilSettled`).
+    @ObservationIgnored private var startTask: Task<Void, Never>?
 
     func start(preferredPort: Int) {
         guard !isRunning, transport == nil else { return }
@@ -141,7 +144,7 @@ final class MCPServerController {
             return .authorized
         }
         self.transport = transport
-        Task {
+        startTask = Task {
             do {
                 try await transport.start()
                 // stop() (or a port-change restart) may have detached this
@@ -172,6 +175,14 @@ final class MCPServerController {
         isRunning = false
         activePort = 0
         Task { try? await transport.stop() }
+    }
+
+    /// Waits for an in-flight `start()` to either bind or fail. `start()`
+    /// returns before the transport is listening; a launch path that builds an
+    /// agent binding without waiting can read `runningPort == nil` on a cold
+    /// launch and silently start the agent with no Ibis tools.
+    func waitUntilSettled() async {
+        await startTask?.value
     }
 }
 #endif
@@ -206,10 +217,26 @@ enum MCPService {
         #if canImport(SwiftMCP)
         MCPServerController.shared.stop()
         guard settings.mcpEnabled else { return }
-        Task {
+        pendingRestart = Task {
             try? await Task.sleep(for: .milliseconds(400))
             MCPServerController.shared.start(preferredPort: settings.mcpPort)
         }
+        #endif
+    }
+
+    #if canImport(SwiftMCP)
+    /// A delayed restart in flight, so `awaitReady` can cover its dead window.
+    private static var pendingRestart: Task<Void, Never>?
+    #endif
+
+    /// Waits until any in-flight start or delayed restart has settled, so
+    /// agent-launch paths read the real bound port instead of racing the bind
+    /// (a race launched the agent with no MCP binding and no diagnostic).
+    /// Returns immediately when MCP is off or already settled.
+    static func awaitReady() async {
+        #if canImport(SwiftMCP)
+        await pendingRestart?.value
+        await MCPServerController.shared.waitUntilSettled()
         #endif
     }
 

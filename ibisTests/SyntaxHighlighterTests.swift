@@ -2,6 +2,10 @@ import Testing
 import Foundation
 @testable import Ibis
 
+// @MainActor: HighlightResult/EditorTheme live in the app target, whose default
+// actor isolation is MainActor — touching their members from a nonisolated
+// suite is an error in Swift 6 language mode.
+@MainActor
 @Suite struct SyntaxHighlighterTests {
     @Test func highlightingSwiftProducesStyledRuns() async {
         let result = await SyntaxHighlighter.shared.highlight(
@@ -11,12 +15,11 @@ import Foundation
             fontName: "Menlo",
             fontSize: 12
         )
-        let unwrapped = try? #require(result)
-        #expect(unwrapped?.sourceLength == 21)
+        #expect(result?.sourceLength == 21)
         // More than one run means the keyword/number/comment got distinct styles.
-        #expect((unwrapped?.runs.count ?? 0) > 1)
+        #expect((result?.runs.count ?? 0) > 1)
         // Runs stay within the source bounds.
-        let maxEnd = unwrapped?.runs.map { NSMaxRange($0.range) }.max() ?? 0
+        let maxEnd = result?.runs.map { NSMaxRange($0.range) }.max() ?? 0
         #expect(maxEnd <= 21)
     }
 

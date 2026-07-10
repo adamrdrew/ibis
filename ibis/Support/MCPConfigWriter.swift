@@ -49,7 +49,42 @@ nonisolated enum MCPConfigWriter {
 
     private static func codexState(file: URL) -> ProjectConfigState {
         guard let contents = try? String(contentsOf: file, encoding: .utf8) else { return .none }
-        return contents.contains("[mcp_servers.ibis]") ? .ibisPresent : .missingIbis
+        // Line-anchored, not substring: a commented-out `# [mcp_servers.ibis]`
+        // must not report the entry as present (it would permanently suppress
+        // the adoption offer while writes silently no-op).
+        return tomlHasTable(named: "mcp_servers.ibis", in: contents) ? .ibisPresent : .missingIbis
+    }
+
+    /// Whether the project's `.mcp.json` carries a legacy *hardcoded* Ibis
+    /// entry — an inline bearer token, or a URL with a literal port instead of
+    /// `${IBIS_MCP_PORT}`. Such an entry leaks the writer's token if committed,
+    /// and resolves only on the machine (and app launch) that wrote it.
+    static func claudeConfigNeedsPortabilityUpgrade(projectRoot root: URL) -> Bool {
+        let file = root.appending(path: ".mcp.json")
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = json["mcpServers"] as? [String: Any],
+              let ibis = servers["ibis"] as? [String: Any]
+        else { return false }
+        let authorization = (ibis["headers"] as? [String: String])?["Authorization"] ?? ""
+        if authorization.hasPrefix("Bearer "), !authorization.contains("${") { return true }
+        if let url = ibis["url"] as? String, url.contains("127.0.0.1"), !url.contains("${") { return true }
+        return false
+    }
+
+    /// Rewrites a legacy hardcoded Ibis entry to the portable env-var form and
+    /// undoes the old secret-file hardening that no longer applies: the file is
+    /// restored to 0644 and Ibis's own `.gitignore` line is removed — with no
+    /// secret inside, `.mcp.json` is meant to be committed and shared, and a
+    /// leftover ignore line would silently keep it out of the team's repo.
+    static func upgradeClaudeConfigPortability(projectRoot root: URL, port: Int, token: String) throws -> Result {
+        let result = try writeClaude(root: root, port: port, token: token)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: result.path.path(percentEncoded: false)
+        )
+        removeGitignoreEntry(".mcp.json", root: root)
+        return result
     }
 
     static func write(agent: AgentKind, projectRoot: URL, port: Int, token: String) throws -> Result {
@@ -67,22 +102,38 @@ nonisolated enum MCPConfigWriter {
 
     private static func writeClaude(root: URL, port: Int, token: String) throws -> Result {
         let file = root.appending(path: ".mcp.json")
+        // Both the secret and the machine-specific port are env-var references
+        // (Claude Code expands `${VAR}` in .mcp.json), so the file contains
+        // nothing machine- or launch-specific: it can be committed and shared,
+        // and each machine's Ibis supplies its own live values through the
+        // integrated-terminal environment. Inlining either broke that —
+        // the token was one `git add . && git push` from public (gitignore
+        // can't protect an already-tracked file), and the port (ephemeral by
+        // default) went stale on any other machine, or on this one after a
+        // relaunch. External shells need both exported manually (see the
+        // message); pinning a fixed port in Settings makes that stable.
         let entry: [String: Any] = [
             "type": "http",
-            "url": serverURL(port: port),
-            "headers": ["Authorization": "Bearer \(token)"]
+            "url": "http://127.0.0.1:${IBIS_MCP_PORT}/mcp",
+            "headers": ["Authorization": "Bearer ${IBIS_MCP_TOKEN}"]
         ]
         try mergeJSON(at: file, serverKey: "ibis", entry: entry, container: "mcpServers")
-        // The file holds a long-lived bearer token — keep it owner-only and out
-        // of git so a stray `git add .` can't commit/push it.
-        restrictPermissions(file)
-        ensureGitignored(".mcp.json", root: root)
-        return Result(path: file, message: "Wrote Ibis MCP server to \(file.lastPathComponent).")
+        return Result(
+            path: file,
+            message: "Wrote Ibis MCP server to \(file.lastPathComponent). Ibis sets IBIS_MCP_TOKEN and IBIS_MCP_PORT automatically in its integrated terminal; to use Claude from another terminal, set IBIS_MCP_TOKEN=\(token) and IBIS_MCP_PORT=\(port) there."
+        )
     }
 
     // MARK: Antigravity — .agents/mcp_config.json (workspace)
 
     private static func writeAntigravity(root: URL, port: Int, token: String) throws -> Result {
+        // This config carries the raw token (Antigravity has no env-var
+        // indirection), and appending to .gitignore does nothing for a file git
+        // already tracks — refuse rather than stage a secret for the next
+        // `git add . && git push`.
+        if isGitTracked(".agents/mcp_config.json", root: root) {
+            throw MergeError(message: ".agents/mcp_config.json is tracked in git, and the Ibis entry contains a secret token. Untrack it first (git rm --cached .agents/mcp_config.json), then try again.")
+        }
         let dir = root.appending(path: ".agents")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appending(path: "mcp_config.json")
@@ -123,7 +174,7 @@ nonisolated enum MCPConfigWriter {
 
         return Result(
             path: file,
-            message: "Wrote Ibis MCP server to .codex/config.toml. Set IBIS_MCP_TOKEN=\(token) in your environment, and ensure this project is trusted in Codex."
+            message: "Wrote Ibis MCP server to .codex/config.toml. Ibis sets IBIS_MCP_TOKEN automatically in its integrated terminal; to use Codex from another terminal, set IBIS_MCP_TOKEN=\(token) there. Ensure this project is trusted in Codex."
         )
     }
 
@@ -173,14 +224,17 @@ nonisolated enum MCPConfigWriter {
     }
 
     /// Whether a JSON config carries an Ibis entry with an inline bearer token.
+    /// A `${IBIS_MCP_TOKEN}` env-var reference is not a secret — hardening that
+    /// file would wrongly chmod and gitignore a config that's safe to commit.
     private static func containsIbisToken(_ file: URL) -> Bool {
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let servers = root["mcpServers"] as? [String: Any],
               let ibis = servers["ibis"] as? [String: Any],
-              let headers = ibis["headers"] as? [String: String]
+              let headers = ibis["headers"] as? [String: String],
+              let authorization = headers["Authorization"]
         else { return false }
-        return headers["Authorization"]?.hasPrefix("Bearer ") == true
+        return authorization.hasPrefix("Bearer ") && !authorization.contains("${")
     }
 
     /// Restricts a written config file to owner read/write (0600) since it holds
@@ -212,28 +266,76 @@ nonisolated enum MCPConfigWriter {
         try? contents.write(to: gitignore, atomically: true, encoding: .utf8)
     }
 
+    /// Removes Ibis's own `entry` line from `.gitignore` — the inverse of
+    /// `ensureGitignored`, for configs upgraded to the secret-free form. Only
+    /// the exact line is dropped; everything else (including user comments and
+    /// patterns) is preserved byte-for-byte.
+    private static func removeGitignoreEntry(_ entry: String, root: URL) {
+        let gitignore = root.appending(path: ".gitignore")
+        guard let contents = try? String(contentsOf: gitignore, encoding: .utf8) else { return }
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        let kept = lines.filter { $0.trimmingCharacters(in: .whitespaces) != entry }
+        guard kept.count != lines.count else { return }
+        try? kept.joined(separator: "\n").write(to: gitignore, atomically: true, encoding: .utf8)
+    }
+
+    /// Whether `relative` is tracked by git in `root` (best effort: false when
+    /// git is missing or the folder isn't a repository).
+    private static func isGitTracked(_ relative: String, root: URL) -> Bool {
+        let process = Process()
+        process.executableURL = URL(filePath: "/usr/bin/env")
+        process.arguments = ["git", "-C", root.path(percentEncoded: false), "ls-files", "--error-unmatch", relative]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        do { try process.run() } catch { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
     // MARK: - TOML table merge
+
+    /// Whether `contents` has a real (non-commented) `[name]` table header.
+    private static func tomlHasTable(named name: String, in contents: String) -> Bool {
+        contents
+            .components(separatedBy: "\n")
+            .contains { isTOMLHeader(line: $0, header: "[\(name)]") }
+    }
+
+    /// Whether a line *is* the given table header — exactly, or followed only
+    /// by an inline comment (`[t] # note`), which TOML permits. Detection and
+    /// the replacement scan must share this rule: if they disagreed, a
+    /// commented variant would read as "present" while the scan matched no
+    /// line, silently writing the file back unchanged.
+    private static func isTOMLHeader(line: String, header: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(header) else { return false }
+        let rest = trimmed.dropFirst(header.count).trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty || rest.hasPrefix("#")
+    }
 
     /// Replaces an existing `[name]` table (up to the next table header or EOF)
     /// with `block`, or appends it if absent. Good enough for our single table.
+    /// Presence uses the same line-anchored test as the replacement scan — a
+    /// substring check would see a commented-out header, take the "replace"
+    /// branch, match no line, and write the file back unchanged while reporting
+    /// success.
     private static func replacingTOMLTable(named name: String, in contents: String, with block: String) -> String {
         let header = "[\(name)]"
-        guard contents.contains(header) else {
+        guard tomlHasTable(named: name, in: contents) else {
             let separator = contents.isEmpty || contents.hasSuffix("\n\n") ? "" : (contents.hasSuffix("\n") ? "\n" : "\n\n")
             return contents + separator + block + "\n"
         }
         var output: [String] = []
         var skipping = false
         for line in contents.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed == header {
+            if isTOMLHeader(line: line, header: header) {
                 skipping = true
                 output.append(contentsOf: block.components(separatedBy: "\n"))
                 continue
             }
             if skipping {
                 // Stop skipping at the next table header.
-                if trimmed.hasPrefix("[") { skipping = false } else { continue }
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") { skipping = false } else { continue }
             }
             output.append(line)
         }

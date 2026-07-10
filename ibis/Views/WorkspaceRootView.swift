@@ -23,5 +23,16 @@ struct WorkspaceRootView: View {
                 openWindow(value: queued)
             }
         }
+        .onAppear {
+            // Register as a drain view and open anything that was queued before
+            // this window's observer existed (`onChange` never fires for an
+            // already-nonzero count).
+            for queued in router.drainViewAppeared(opener: { openWindow(value: $0) }) {
+                openWindow(value: queued)
+            }
+        }
+        .onDisappear {
+            router.drainViewDisappeared()
+        }
     }
 }

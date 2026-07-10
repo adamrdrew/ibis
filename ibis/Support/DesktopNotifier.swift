@@ -17,8 +17,12 @@ final class DesktopNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// userInfo key carrying the project token of the window to raise on tap.
     private static let tokenKey = "ibisProjectToken"
 
-    /// Whether we've already asked the system for authorization this run.
-    private var didRequestAuthorization = false
+    /// The single authorization request for this process, kicked off by the
+    /// first `post`. Every post awaits its completion before adding a request:
+    /// adding while the system prompt is still up (status `.notDetermined`)
+    /// fails and nothing retries — which used to drop the very first
+    /// notification, the one that triggered the prompt.
+    private var authorizationTask: Task<Void, Never>?
 
     /// Whether the UserNotifications machinery is safe to touch in this process.
     /// `UNUserNotificationCenter.current()` reaches the `usernoted` daemon, which
@@ -72,7 +76,6 @@ final class DesktopNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// notification center is unavailable and would trap).
     func post(title: String, body: String, token: String?) {
         guard Self.isUsable else { return }
-        requestAuthorizationIfNeeded()
 
         let content = UNMutableNotificationContent()
         content.title = title
@@ -84,13 +87,28 @@ final class DesktopNotifier: NSObject, UNUserNotificationCenterDelegate {
         let request = UNNotificationRequest(
             identifier: UUID().uuidString, content: content, trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        // Add only after authorization has *resolved* — if this is the first
+        // post ever, the user is looking at the permission prompt right now,
+        // and adding immediately would fail silently and never retry.
+        Task {
+            await resolveAuthorization()
+            // Denied authorization surfaces here as an error; there's nothing
+            // to do about it (matching the old fire-and-forget delivery).
+            try? await UNUserNotificationCenter.current().add(request)
+        }
     }
 
-    private func requestAuthorizationIfNeeded() {
-        guard !didRequestAuthorization else { return }
-        didRequestAuthorization = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    /// Ensures the (one) authorization request has been made and awaits its
+    /// outcome. Later calls settle immediately: the system only prompts once,
+    /// and `requestAuthorization` just reports the stored status after that.
+    private func resolveAuthorization() async {
+        if authorizationTask == nil {
+            authorizationTask = Task {
+                _ = try? await UNUserNotificationCenter.current()
+                    .requestAuthorization(options: [.alert, .sound])
+            }
+        }
+        await authorizationTask?.value
     }
 
     // MARK: - UNUserNotificationCenterDelegate

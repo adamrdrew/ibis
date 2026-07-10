@@ -17,6 +17,10 @@ jobs:
     # on a macOS 26+ runner (the test-host app's minimum-OS won't launch on an
     # older OS). Pin the image rather than using `macos-latest`, which can lag.
     runs-on: macos-26
+    # The local suite finishes in ~3 minutes; a healthy CI run (with cold
+    # package resolution and build) fits comfortably in 30. Without this, a
+    # wedged test host eats the 6-hour default (every run July 9–10 did).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -42,19 +46,64 @@ jobs:
           # a fresh runner has never "trusted" them (no one can click the Xcode
           # dialog here), so without it the build fails with "Macro … must be
           # enabled before it can be used".
+          # No pipeline here: `cmd | tee &` makes $! the PID of tee, so the
+          # watchdog's kill hit tee while xcodebuild (and the hung test host)
+          # lived on to the job timeout — and the samples it took were lost
+          # with the VM. Redirect instead, so $! is really xcodebuild.
           xcodebuild test \
             -project ibis.xcodeproj \
             -scheme Ibis \
             -destination 'platform=macOS' \
             -skipMacroValidation \
             -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO > xcodebuild.log 2>&1 &
+          XB=$!
 
-      # Keep the result bundle for inspection when a run fails.
+          # Hang watchdog: a wedged test host produces no output but never
+          # exits. If the log stops growing for 5 minutes, dump thread stacks
+          # of every involved process INTO THIS STEP LOG (artifacts can be lost
+          # to job cancellation; the log can't), then kill the whole tree.
+          last=0; stall=0
+          while kill -0 "$XB" 2>/dev/null; do
+            sleep 30
+            size=$(stat -f%z xcodebuild.log 2>/dev/null || echo 0)
+            if [ "$size" = "$last" ]; then stall=$((stall+30)); else stall=0; last=$size; fi
+            if [ "$stall" -ge 300 ]; then
+              echo "=== HANG: no xcodebuild output for ${stall}s ==="
+              echo "=== last xcodebuild.log lines: ==="
+              tail -40 xcodebuild.log
+              for pid in $(pgrep -f "Ibis.app/Contents/MacOS/Ibis"); do
+                sample "$pid" 5 -file "hang-sample-host-$pid.txt" || true
+                echo "=== sample of test host $pid: ==="
+                sed -n '1,140p' "hang-sample-host-$pid.txt" || true
+              done
+              sample "$XB" 5 -file hang-sample-xcodebuild.txt || true
+              echo "=== sample of xcodebuild $XB (first 80 lines): ==="
+              sed -n '1,80p' hang-sample-xcodebuild.txt || true
+              # Kill the entire tree — the hung host, not just xcodebuild,
+              # is what keeps the step alive.
+              pkill -9 -f "Ibis.app/Contents/MacOS/Ibis" || true
+              kill -9 "$XB" 2>/dev/null || true
+              echo "HANG" > hang-diagnosis.txt
+              exit 1
+            fi
+          done
+
+          wait "$XB"; XB_STATUS=$?
+          tail -60 xcodebuild.log
+          exit "$XB_STATUS"
+
+      # Keep the result bundle and any hang stacks for inspection. `always()`,
+      # not `failure()`: a job-timeout cancellation skips failure()-gated steps,
+      # which is exactly when the hang evidence matters most.
       - name: Upload test results
-        if: ${{ failure() }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: TestResults
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            xcodebuild.log
+            hang-diagnosis.txt
+            hang-sample-*.txt
           if-no-files-found: ignore

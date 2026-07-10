@@ -56,6 +56,21 @@ import Foundation
         #expect(doc.contentVersion == before + 1)
     }
 
+    @Test func programmaticTextReplacementClearsTheUndoStack() {
+        let doc = OpenDocument()
+        doc.text = "hello world"
+        // Simulate a recorded user edit whose undo range points into this text.
+        doc.undoManager.registerUndo(withTarget: doc) { _ in }
+        #expect(doc.undoManager.canUndo)
+
+        // A programmatic replacement (load, revert, applied agent edit) must
+        // invalidate the stack — even with no editor mounted, where the
+        // view-layer clear can't run. A stale action replayed against shorter
+        // text raises an out-of-range exception.
+        doc.text = "short"
+        #expect(!doc.undoManager.canUndo)
+    }
+
     // MARK: - Load
 
     @Test func loadReadsFileContents() async throws {

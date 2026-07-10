@@ -65,7 +65,14 @@ final class FileNode: Identifiable {
             existing[child.url] = child
         }
         children = entries.map { entry in
-            existing[entry.url] ?? FileNode(url: entry.url, isDirectory: entry.isDirectory)
+            // Reuse only when the entry is still the same *kind* — `isDirectory`
+            // is immutable on the node, so a path replaced by the other kind
+            // (`rm notes && mkdir notes` coalesced into one reload) must get a
+            // fresh node or it keeps the stale type forever.
+            if let node = existing[entry.url], node.isDirectory == entry.isDirectory {
+                return node
+            }
+            return FileNode(url: entry.url, isDirectory: entry.isDirectory)
         }
     }
 

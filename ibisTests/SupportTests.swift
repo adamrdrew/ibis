@@ -34,7 +34,10 @@ import AppKit
         #expect(ref.url == URL(filePath: "/some/folder"))
     }
 
-    @Test func codableRoundTrip() throws {
+    // @MainActor: WorkspaceRef's Codable conformance is MainActor-isolated (the
+    // app target's default isolation), so encoding it from a nonisolated test
+    // is an error in Swift 6 language mode.
+    @Test @MainActor func codableRoundTrip() throws {
         let ref = WorkspaceRef(path: "/a/b", isDirectory: false)
         let data = try JSONEncoder().encode(ref)
         let decoded = try JSONDecoder().decode(WorkspaceRef.self, from: data)
@@ -58,6 +61,26 @@ import AppKit
         #expect(drained == [ref])
         #expect(LaunchRouter.shared.pendingCount == 0)
         #expect(LaunchRouter.shared.drain().isEmpty)
+    }
+
+    @Test func enqueueBeforeAnyDrainViewIsHandedToTheNextAppearance() {
+        _ = LaunchRouter.shared.drain()
+        // Hold an observer open first so `enqueue` can't self-open a real
+        // window in the test host (the live app UI shares this singleton).
+        _ = LaunchRouter.shared.drainViewAppeared(opener: { _ in })
+        defer { LaunchRouter.shared.drainViewDisappeared() }
+
+        // The cold-launch order: enqueued before the next drain view appears.
+        // `drainViewAppeared` hands the queued refs to its caller — the caller
+        // must open THESE; a second `drain()` finds an already-empty queue
+        // (the regression: WelcomeView discarded the return value and the
+        // launch open was silently lost).
+        let ref = WorkspaceRef(path: "/tmp/cold-launch-\(UUID().uuidString)", isDirectory: true)
+        LaunchRouter.shared.enqueue(ref)
+        let handed = LaunchRouter.shared.drainViewAppeared(opener: { _ in })
+        defer { LaunchRouter.shared.drainViewDisappeared() }
+        #expect(handed == [ref])
+        #expect(LaunchRouter.shared.pendingCount == 0)
     }
 
     @Test func agentLaunchIsConsumedExactlyOnce() {

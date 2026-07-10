@@ -6,7 +6,7 @@ import SwiftUI
 struct ProjectSearchView: View {
     @Bindable var model: ProjectSearchModel
     let root: URL
-    var onOpen: (URL, NSRange) -> Void
+    var onOpen: (URL, SearchMatch) -> Void
 
     @FocusState private var isFieldFocused: Bool
     @State private var debounceTask: Task<Void, Never>?
@@ -126,7 +126,7 @@ struct ProjectSearchView: View {
                     Section {
                         ForEach(file.matches) { match in
                             Button {
-                                onOpen(file.url, match.characterRange)
+                                onOpen(file.url, match)
                             } label: {
                                 matchRow(match)
                             }

@@ -35,6 +35,19 @@ struct TerminalDockView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Keyboard focus follows the active tab (only when it was already in a
+        // terminal) — hidden tabs stay mounted, so nothing else moves it.
+        .onChange(of: dock.activeSessionID) {
+            dock.moveKeyboardFocusToActiveTerminalIfNeeded()
+        }
+        .onAppear {
+            // The dock relaunches sessions (Run actions) outside any view pass,
+            // so give it live access to the settings shell override — capturing
+            // today's value would recreate the frozen-override bug.
+            dock.shellOverrideProvider = { [settings] in
+                settings.terminalShellPath.isEmpty ? nil : settings.terminalShellPath
+            }
+        }
     }
 
     private var header: some View {
@@ -116,7 +129,6 @@ struct TerminalDockView: View {
             if session.hasStarted && !session.isRunning && session.role != .run {
                 TerminalExitedOverlay(
                     session: session,
-                    isActive: isActive,
                     onRestart: {
                         workspace.restartTerminalSession(session, settings: settings, shellOverride: shellOverride)
                     }
@@ -125,14 +137,37 @@ struct TerminalDockView: View {
         }
         .opacity(isActive ? 1 : 0)
         .allowsHitTesting(isActive)
+        .onAppear { wireRestartRequest(session) }
+    }
+
+    /// Wires the session's Return-key restart request (fired by the exited
+    /// terminal view while it holds keyboard focus — see
+    /// `TerminalSession.syncReturnKeyInterception`). Gated on the dock actually
+    /// showing and this tab being the active one, so Return can never restart a
+    /// collapsed or hidden terminal; the shell override is read from settings at
+    /// invocation time so a restart honors a path changed since launch.
+    private func wireRestartRequest(_ session: TerminalSession) {
+        let workspace = workspace
+        session.onRestartRequest = { [weak workspace, weak dock, weak session, settings] in
+            guard let workspace, let dock, let session,
+                  dock.isVisible, dock.activeSession === session,
+                  session.hasStarted, !session.isRunning else { return false }
+            let override = settings.terminalShellPath.isEmpty ? nil : settings.terminalShellPath
+            workspace.restartTerminalSession(session, settings: settings, shellOverride: override)
+            return true
+        }
     }
 }
 
 /// Shown over a terminal whose shell has exited: a dimmed cover with the exit
-/// status and a restart control (also triggered by Return when active).
+/// status and a restart control. Return also restarts, but only while the dead
+/// terminal itself holds keyboard focus — that path is the terminal view's
+/// `returnKeyAction` (see `TerminalSession.syncReturnKeyInterception`), NOT a
+/// `.keyboardShortcut(.return)` on the button, which is window-global and would
+/// hijack plain Return from the editor (even with the dock collapsed to zero,
+/// since the dock always stays mounted).
 private struct TerminalExitedOverlay: View {
     let session: TerminalSession
-    let isActive: Bool
     let onRestart: () -> Void
 
     private var statusText: String {
@@ -156,16 +191,9 @@ private struct TerminalExitedOverlay: View {
                 Text(statusText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                if isActive {
-                    Button("Restart", action: onRestart)
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.ibisAccent)
-                        .keyboardShortcut(.return, modifiers: [])
-                } else {
-                    Button("Restart", action: onRestart)
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color.ibisAccent)
-                }
+                Button("Restart", action: onRestart)
+                    .buttonStyle(.borderedProminent)
+                    .tint(Color.ibisAccent)
             }
             .padding(24)
         }

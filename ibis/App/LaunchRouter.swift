@@ -27,13 +27,42 @@ final class LaunchRouter {
     /// Observable signal that a drain is needed. Views observe this in `onChange`.
     var pendingCount: Int { pending.count }
 
+    /// The most recent `openWindow` action, captured by a drain view. SwiftUI
+    /// environment actions stay valid app-wide after capture, so the router can
+    /// open a window itself when no drain view is alive.
+    @ObservationIgnored private var windowOpener: ((WorkspaceRef) -> Void)?
+
+    /// How many drain views (Welcome / workspace windows) are currently alive.
+    @ObservationIgnored private var drainObservers = 0
+
     private init() {}
+
+    /// A drain view came on screen: remember how to open windows, and hand it
+    /// anything already queued — `onChange(of: pendingCount)` alone misses a
+    /// count that was nonzero *before* the observer existed (a cold launch whose
+    /// scene restoration suppressed the Welcome window, for example).
+    func drainViewAppeared(opener: @escaping (WorkspaceRef) -> Void) -> [WorkspaceRef] {
+        drainObservers += 1
+        windowOpener = opener
+        return drain()
+    }
+
+    func drainViewDisappeared() {
+        drainObservers = max(0, drainObservers - 1)
+    }
 
     func enqueue(_ ref: WorkspaceRef, runAgent: Bool = false) {
         pending.append(ref)
         if runAgent {
             pendingAgentLaunches.insert(WorkspaceRef.canonical(ref.path))
             agentLaunchSignal &+= 1
+        }
+        // With every window closed the app keeps running but nothing observes
+        // `pendingCount` — a Finder/CLI open would sit queued (and fire,
+        // confusingly, minutes later when the user next opens a window). Open
+        // it directly instead.
+        if drainObservers == 0, let windowOpener {
+            for queued in drain() { windowOpener(queued) }
         }
     }
 

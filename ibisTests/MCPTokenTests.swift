@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 @Suite(.serialized) struct MCPTokenStoreTests {
     @Test func tokenIsStableForTheSameRoot() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/mcp-\(UUID().uuidString)")
             let first = MCPTokenStore.token(for: root)
             let second = MCPTokenStore.token(for: root)
@@ -17,7 +17,7 @@ import Foundation
     }
 
     @Test func trailingSlashResolvesToTheSameToken() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let path = "/tmp/mcp-\(UUID().uuidString)"
             let a = MCPTokenStore.token(for: URL(filePath: path))
             let b = MCPTokenStore.token(for: URL(filePath: path + "/"))
@@ -26,7 +26,7 @@ import Foundation
     }
 
     @Test func distinctRootsGetDistinctTokens() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let a = MCPTokenStore.token(for: URL(filePath: "/tmp/mcp-a-\(UUID().uuidString)"))
             let b = MCPTokenStore.token(for: URL(filePath: "/tmp/mcp-b-\(UUID().uuidString)"))
             #expect(a != b)
