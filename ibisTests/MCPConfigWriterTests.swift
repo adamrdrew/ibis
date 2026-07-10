@@ -33,14 +33,19 @@ import Foundation
             let servers = try #require(object["mcpServers"] as? [String: Any])
             let ibis = try #require(servers["ibis"] as? [String: Any])
             #expect(ibis["type"] as? String == "http")
-            #expect(ibis["url"] as? String == "http://127.0.0.1:4000/mcp")
             // .mcp.json is Claude's project-shared config — teams commit it, and
-            // gitignore can't protect an already-tracked file. The secret stays
-            // out of the file (Claude expands ${IBIS_MCP_TOKEN} at load)…
+            // gitignore can't protect an already-tracked file. The secret AND
+            // the machine/launch-specific port stay out of the file (Claude
+            // expands ${VAR} at load), so the same bytes work on every machine
+            // and never go stale…
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
             #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
-            #expect(!(try String(contentsOf: file, encoding: .utf8)).contains("tok123"))
-            // …and the value is surfaced in the message for external shells.
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            #expect(!contents.contains("tok123"))
+            #expect(!contents.contains("4000"))
+            // …and the live values are surfaced in the message for external shells.
             #expect(result.message.contains("tok123"))
+            #expect(result.message.contains("4000"))
             // A secret-free file must not be gitignored: teams commit it.
             #expect(!gitignore(in: root).contains(".mcp.json"))
         }
@@ -75,7 +80,7 @@ import Foundation
             let servers = try #require(object["mcpServers"] as? [String: Any])
             #expect(servers.count == 1)
             let ibis = try #require(servers["ibis"] as? [String: Any])
-            #expect(ibis["url"] as? String == "http://127.0.0.1:5000/mcp")
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
             #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
         }
     }

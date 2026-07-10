@@ -303,13 +303,20 @@ struct WorkspaceView: View {
             self.workspace = workspace
             MCPBridge.shared.register(workspace)
             // Every terminal/agent session in this window gets the project's MCP
-            // token: Codex reads it via bearer_token_env_var, and a hand-run
-            // `claude` picks it up through the `${IBIS_MCP_TOKEN}` reference in
-            // .mcp.json. Without it the written configs authenticate nothing and
-            // the agent silently has no Ibis tools. Inert while MCP is off.
+            // token and the server's live port: Codex reads the token via
+            // bearer_token_env_var, and a hand-run `claude` resolves both
+            // through the `${IBIS_MCP_TOKEN}` / `${IBIS_MCP_PORT}` references
+            // in .mcp.json. The env-var indirection is what makes a *committed*
+            // .mcp.json portable: the file carries nothing machine-specific, so
+            // each teammate's Ibis supplies its own values (the port is
+            // ephemeral by default — inlined, it broke the config on any other
+            // machine, and on this one after a relaunch). Inert while MCP is off.
             if MCPService.isAvailable {
                 workspace.terminal.extraLaunchEnvironment["IBIS_MCP_TOKEN"] =
                     MCPBridge.shared.token(for: workspace)
+                if let port = MCPService.runningPort {
+                    workspace.terminal.extraLaunchEnvironment["IBIS_MCP_PORT"] = String(port)
+                }
             }
             await workspace.rootNode.loadChildren()
             workspace.refreshRootEmptiness()

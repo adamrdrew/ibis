@@ -70,22 +70,25 @@ nonisolated enum MCPConfigWriter {
 
     private static func writeClaude(root: URL, port: Int, token: String) throws -> Result {
         let file = root.appending(path: ".mcp.json")
-        // Reference the token via `${IBIS_MCP_TOKEN}` (Claude Code expands
-        // environment variables in .mcp.json) instead of inlining the secret:
-        // `.mcp.json` is Claude's *project-shared* config, routinely committed
-        // by teams, and gitignoring can't protect an already-tracked file — the
-        // old inline token was one `git add . && git push` from public. Ibis
-        // exports the variable into its integrated-terminal sessions; external
-        // shells need it exported manually (see the message).
+        // Both the secret and the machine-specific port are env-var references
+        // (Claude Code expands `${VAR}` in .mcp.json), so the file contains
+        // nothing machine- or launch-specific: it can be committed and shared,
+        // and each machine's Ibis supplies its own live values through the
+        // integrated-terminal environment. Inlining either broke that —
+        // the token was one `git add . && git push` from public (gitignore
+        // can't protect an already-tracked file), and the port (ephemeral by
+        // default) went stale on any other machine, or on this one after a
+        // relaunch. External shells need both exported manually (see the
+        // message); pinning a fixed port in Settings makes that stable.
         let entry: [String: Any] = [
             "type": "http",
-            "url": serverURL(port: port),
+            "url": "http://127.0.0.1:${IBIS_MCP_PORT}/mcp",
             "headers": ["Authorization": "Bearer ${IBIS_MCP_TOKEN}"]
         ]
         try mergeJSON(at: file, serverKey: "ibis", entry: entry, container: "mcpServers")
         return Result(
             path: file,
-            message: "Wrote Ibis MCP server to \(file.lastPathComponent). Ibis sets IBIS_MCP_TOKEN automatically in its integrated terminal; to use Claude from another terminal, set IBIS_MCP_TOKEN=\(token) there."
+            message: "Wrote Ibis MCP server to \(file.lastPathComponent). Ibis sets IBIS_MCP_TOKEN and IBIS_MCP_PORT automatically in its integrated terminal; to use Claude from another terminal, set IBIS_MCP_TOKEN=\(token) and IBIS_MCP_PORT=\(port) there."
         )
     }
 
