@@ -223,6 +223,71 @@ import Foundation
         }
     }
 
+    // MARK: Legacy hardcoded-entry detection & upgrade
+
+    private func writeLegacyConfig(in root: URL, extraServer: Bool = false) throws -> URL {
+        let file = root.appending(path: ".mcp.json")
+        let other = extraServer ? #""other": {"type": "stdio", "command": "other-mcp"}, "# : ""
+        let config = """
+        {"mcpServers": {\(other)"ibis": {"type": "http", "url": "http://127.0.0.1:4000/mcp", \
+        "headers": {"Authorization": "Bearer legacy-secret"}}}, "custom": true}
+        """
+        try config.write(to: file, atomically: true, encoding: .utf8)
+        return file
+    }
+
+    @Test func detectsLegacyHardcodedIbisEntries() throws {
+        try TestSupport.withTempDir { root in
+            // No file / no ibis entry: nothing to upgrade.
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+            try #"{"mcpServers": {"other": {"type": "stdio", "command": "x"}}}"#
+                .write(to: root.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // Inline token: needs upgrade.
+            _ = try writeLegacyConfig(in: root)
+            #expect(MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // Placeholder token but literal port: still machine-specific.
+            let portOnly = #"{"mcpServers": {"ibis": {"type": "http", "url": "http://127.0.0.1:4000/mcp", "headers": {"Authorization": "Bearer ${IBIS_MCP_TOKEN}"}}}}"#
+            try portOnly.write(to: root.appending(path: ".mcp.json"), atomically: true, encoding: .utf8)
+            #expect(MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+
+            // The current portable form: nothing to do.
+            _ = try MCPConfigWriter.write(agent: .claude, projectRoot: root, port: 1, token: "t")
+            #expect(!MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: root))
+        }
+    }
+
+    @Test func upgradeRewritesTheEntryAndUndoesTheOldHardening() throws {
+        try TestSupport.withTempDir { root in
+            let file = try writeLegacyConfig(in: root, extraServer: true)
+            // Simulate the old hardening: 0600 + Ibis's own gitignore line.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+            try "node_modules/\n.mcp.json\n".write(to: root.appending(path: ".gitignore"), atomically: true, encoding: .utf8)
+
+            let result = try MCPConfigWriter.upgradeClaudeConfigPortability(projectRoot: root, port: 9100, token: "legacy-secret")
+
+            let object = try json(at: file)
+            let servers = try #require(object["mcpServers"] as? [String: Any])
+            let ibis = try #require(servers["ibis"] as? [String: Any])
+            #expect(ibis["url"] as? String == "http://127.0.0.1:${IBIS_MCP_PORT}/mcp")
+            #expect((ibis["headers"] as? [String: String])?["Authorization"] == "Bearer ${IBIS_MCP_TOKEN}")
+            // Other servers and unknown keys survive; the secret is gone.
+            #expect(servers["other"] != nil)
+            #expect(object["custom"] as? Bool == true)
+            #expect(!(try String(contentsOf: file, encoding: .utf8)).contains("legacy-secret"))
+            #expect(result.message.contains("legacy-secret"))
+
+            // The old hardening is undone: committable perms, gitignore line
+            // removed — but only Ibis's exact line; the user's entries stay.
+            #expect(try permissions(of: file) == 0o644)
+            let ignore = gitignore(in: root)
+            #expect(ignore.contains("node_modules/"))
+            #expect(!ignore.components(separatedBy: "\n").contains(".mcp.json"))
+        }
+    }
+
     // MARK: hardenExistingConfigs
 
     @Test func hardenFixesPermissionsOnTokenBearingConfigs() throws {

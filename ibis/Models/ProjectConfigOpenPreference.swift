@@ -68,6 +68,9 @@ enum ProjectConfigOpenStore {
 enum MCPAdoptionStore {
     private static var defaults: UserDefaults { IbisDefaults.store }
     private static let declinedKey = "ibisMCP.declinedRoots"
+    /// Separate list for the legacy-config *upgrade* offer: declining to add
+    /// Ibis and declining to modernize an existing entry are distinct choices.
+    private static let upgradeDeclinedKey = "ibisMCP.upgradeDeclinedRoots"
 
     static func hasDeclined(_ root: URL) -> Bool {
         (defaults.stringArray(forKey: declinedKey) ?? []).contains(key(for: root))
@@ -79,6 +82,18 @@ enum MCPAdoptionStore {
         guard !list.contains(k) else { return }
         list.append(k)
         defaults.set(list, forKey: declinedKey)
+    }
+
+    static func hasDeclinedUpgrade(_ root: URL) -> Bool {
+        (defaults.stringArray(forKey: upgradeDeclinedKey) ?? []).contains(key(for: root))
+    }
+
+    static func setDeclinedUpgrade(_ root: URL) {
+        var list = defaults.stringArray(forKey: upgradeDeclinedKey) ?? []
+        let k = key(for: root)
+        guard !list.contains(k) else { return }
+        list.append(k)
+        defaults.set(list, forKey: upgradeDeclinedKey)
     }
 
     private static func key(for root: URL) -> String {

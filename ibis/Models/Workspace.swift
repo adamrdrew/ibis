@@ -1211,16 +1211,44 @@ final class Workspace {
     /// Drives the proactive "add Ibis to your MCP config?" prompt in the window.
     var mcpAdoptionOffer = false
 
+    /// Drives the "modernize the hardcoded Ibis MCP entry?" prompt in the window.
+    var mcpUpgradeOffer = false
+
     /// Decides whether to proactively offer to add Ibis to this project's
-    /// existing agent MCP config. Fires only when the agent feature is on, the
-    /// project already has an MCP config that lacks the Ibis entry, and the user
-    /// hasn't declined before. Skipped while a trust decision is pending so two
-    /// prompts don't stack on the same window.
+    /// existing agent MCP config — or, when an Ibis entry exists but is the
+    /// legacy *hardcoded* form (inline token/port), to modernize it. Fires only
+    /// when the agent feature is on and the user hasn't declined that offer
+    /// before. Skipped while a trust decision is pending so two prompts don't
+    /// stack on the same window. (The two offers can't co-fire: a legacy entry
+    /// means Ibis is present, which suppresses the adoption offer.)
     func evaluateAgentConfigOffer(settings: AppSettings) {
         guard MCPService.isAvailable, settings.mcpEnabled else { return }
-        guard !trustPromptNeeded, !MCPAdoptionStore.hasDeclined(projectRoot) else { return }
+        guard !trustPromptNeeded else { return }
+        // A hardcoded entry leaks the writer's token if committed, and resolves
+        // only on the machine (and, with the default ephemeral port, only the
+        // app launch) that wrote it — a teammate's hand-run agent silently gets
+        // no Ibis tools. Offer to rewrite it to the portable env-var form.
+        if MCPConfigWriter.claudeConfigNeedsPortabilityUpgrade(projectRoot: projectRoot),
+           !MCPAdoptionStore.hasDeclinedUpgrade(projectRoot) {
+            mcpUpgradeOffer = true
+            return
+        }
+        guard !MCPAdoptionStore.hasDeclined(projectRoot) else { return }
         guard MCPConfigWriter.projectState(agent: settings.agentKind, projectRoot: projectRoot) == .missingIbis else { return }
         mcpAdoptionOffer = true
+    }
+
+    /// Rewrites the legacy hardcoded Ibis entry in `.mcp.json` to the portable
+    /// env-var form (undoing the old 0600/gitignore hardening, which no longer
+    /// applies to a secret-free file). Returns the human-readable result.
+    @discardableResult
+    func upgradeAgentConfigPortability(settings: AppSettings) throws -> String {
+        let port = MCPService.runningPort ?? settings.mcpPort
+        return try MCPConfigWriter.upgradeClaudeConfigPortability(
+            projectRoot: projectRoot,
+            port: port,
+            token: MCPBridge.shared.token(for: self)
+        ).message
     }
 
     // MARK: - Trust

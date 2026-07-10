@@ -104,6 +104,24 @@ struct WorkspaceView: View {
         } message: {
             Text("“\(workspace?.displayName ?? "This project")” already has an MCP configuration but doesn’t include Ibis. Add it so \(settings.agentName) can use Ibis’s tools (open files, propose edits, and more) in this window.")
         }
+        // Legacy hardcoded Ibis entry (inline token/port) detected on open:
+        // offer to rewrite it to the portable env-var form. Declining is
+        // remembered per project.
+        .alert("Update this project’s Ibis MCP entry?", isPresented: mcpUpgradePresented) {
+            Button("Update Entry") {
+                guard let workspace else { return }
+                do {
+                    try workspace.upgradeAgentConfigPortability(settings: settings)
+                } catch {
+                    workspace.presentError("Couldn’t update the Ibis MCP entry: \(error.localizedDescription)")
+                }
+            }
+            Button("Not Now", role: .cancel) {
+                if let workspace { MCPAdoptionStore.setDeclinedUpgrade(workspace.projectRoot) }
+            }
+        } message: {
+            Text(".mcp.json points at Ibis with a hardcoded token and port, which works only on the machine that wrote it — and exposes the token if the file is committed. Ibis can rewrite the entry to use environment variables so the same file works for every developer.")
+        }
     }
 
     private var navigationRoot: some View {
@@ -464,6 +482,13 @@ struct WorkspaceView: View {
         Binding(
             get: { workspace?.mcpAdoptionOffer ?? false },
             set: { if !$0 { workspace?.mcpAdoptionOffer = false } }
+        )
+    }
+
+    private var mcpUpgradePresented: Binding<Bool> {
+        Binding(
+            get: { workspace?.mcpUpgradeOffer ?? false },
+            set: { if !$0 { workspace?.mcpUpgradeOffer = false } }
         )
     }
 

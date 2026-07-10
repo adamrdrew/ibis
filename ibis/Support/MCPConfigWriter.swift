@@ -55,6 +55,38 @@ nonisolated enum MCPConfigWriter {
         return tomlHasTable(named: "mcp_servers.ibis", in: contents) ? .ibisPresent : .missingIbis
     }
 
+    /// Whether the project's `.mcp.json` carries a legacy *hardcoded* Ibis
+    /// entry — an inline bearer token, or a URL with a literal port instead of
+    /// `${IBIS_MCP_PORT}`. Such an entry leaks the writer's token if committed,
+    /// and resolves only on the machine (and app launch) that wrote it.
+    static func claudeConfigNeedsPortabilityUpgrade(projectRoot root: URL) -> Bool {
+        let file = root.appending(path: ".mcp.json")
+        guard let data = try? Data(contentsOf: file),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let servers = json["mcpServers"] as? [String: Any],
+              let ibis = servers["ibis"] as? [String: Any]
+        else { return false }
+        let authorization = (ibis["headers"] as? [String: String])?["Authorization"] ?? ""
+        if authorization.hasPrefix("Bearer "), !authorization.contains("${") { return true }
+        if let url = ibis["url"] as? String, url.contains("127.0.0.1"), !url.contains("${") { return true }
+        return false
+    }
+
+    /// Rewrites a legacy hardcoded Ibis entry to the portable env-var form and
+    /// undoes the old secret-file hardening that no longer applies: the file is
+    /// restored to 0644 and Ibis's own `.gitignore` line is removed — with no
+    /// secret inside, `.mcp.json` is meant to be committed and shared, and a
+    /// leftover ignore line would silently keep it out of the team's repo.
+    static func upgradeClaudeConfigPortability(projectRoot root: URL, port: Int, token: String) throws -> Result {
+        let result = try writeClaude(root: root, port: port, token: token)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: result.path.path(percentEncoded: false)
+        )
+        removeGitignoreEntry(".mcp.json", root: root)
+        return result
+    }
+
     static func write(agent: AgentKind, projectRoot: URL, port: Int, token: String) throws -> Result {
         switch agent {
         case .claude, .custom:
@@ -232,6 +264,19 @@ nonisolated enum MCPConfigWriter {
         if !contents.isEmpty && !contents.hasSuffix("\n") { contents += "\n" }
         contents += entry + "\n"
         try? contents.write(to: gitignore, atomically: true, encoding: .utf8)
+    }
+
+    /// Removes Ibis's own `entry` line from `.gitignore` — the inverse of
+    /// `ensureGitignored`, for configs upgraded to the secret-free form. Only
+    /// the exact line is dropped; everything else (including user comments and
+    /// patterns) is preserved byte-for-byte.
+    private static func removeGitignoreEntry(_ entry: String, root: URL) {
+        let gitignore = root.appending(path: ".gitignore")
+        guard let contents = try? String(contentsOf: gitignore, encoding: .utf8) else { return }
+        let lines = contents.split(separator: "\n", omittingEmptySubsequences: false)
+        let kept = lines.filter { $0.trimmingCharacters(in: .whitespaces) != entry }
+        guard kept.count != lines.count else { return }
+        try? kept.joined(separator: "\n").write(to: gitignore, atomically: true, encoding: .utf8)
     }
 
     /// Whether `relative` is tracked by git in `root` (best effort: false when
