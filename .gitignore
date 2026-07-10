@@ -4,5 +4,4 @@ build/
 *.xcuserstate
 xcuserdata/
 *.xcresult
-.mcp.json
 .ibis.json

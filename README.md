@@ -18,6 +18,8 @@ GUI instead of dumping to the terminal. It can send you nice diff visualizations
 And you can get notifications from your agents if they need your attention while your focus is 
 elsewhere. 
 
+![Ibis: file tree, editor, and an agent running in the integrated terminal](docs/images/editor-overview.png)
+
 ## Features
 
 - **Folder-first workflow.** Open a folder and browse a hierarchical file tree
@@ -31,7 +33,8 @@ elsewhere.
 - **Project search** across the whole folder.
 - **Integrated terminal** (SwiftTerm) with tabs, dockable to the bottom or the
   trailing edge, spawning a real login shell — plus one-key launch of your
-  configured coding agent in a new terminal tab rooted at the workspace.
+  configured coding agent in a new terminal tab rooted at the workspace, and
+  light/dark terminal color themes with live previews in Settings.
 - **Live Git status bar** that refreshes as you commit or switch branches in the
   terminal.
 - **Markdown & HTML preview** rendered in a `WKWebView`.
@@ -39,6 +42,11 @@ elsewhere.
   Ibis" Services menu item, and Shortcuts / Siri via App Intents.
 - **Unsaved-change protection.** Confirms before closing tabs or windows with
   unsaved work.
+
+<p>
+  <img src="docs/images/split-panes.png" width="49%" alt="Two resizable editor panes side by side, with a terminal running git log docked below">
+  <img src="docs/images/terminal-themes.png" width="49%" alt="Settings showing terminal color theme pickers with live previews">
+</p>
 
 ## Agent integration
 
@@ -53,6 +61,8 @@ terminal:
 - `propose_edit` / `propose_patch` — the agent sends an intended change and Ibis
   shows **you** a diff; the change applies and saves only if you approve.
 - `notify` / `ask_human` — surface a message or ask a question.
+
+![An agent-generated report rendered as a live HTML tab via open_content](docs/images/agent-report.png)
 
 Supported agents (each has its own MCP-config file format, which Ibis writes):
 **Claude Code**, **Codex**, **Antigravity**, plus a **Custom** command. For
