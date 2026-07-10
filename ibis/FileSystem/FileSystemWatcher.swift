@@ -53,10 +53,10 @@ final class FileSystemWatcher {
             var events: [Event] = []
             events.reserveCapacity(paths.count)
             for (index, path) in paths.enumerated() where index < numEvents {
-                let flags = eventFlags[index]
+                let eventFlag = eventFlags[index]
                 events.append(Event(
                     path: path,
-                    mustScanSubDirs: flags & UInt32(kFSEventStreamEventFlagMustScanSubDirs) != 0
+                    mustScanSubDirs: eventFlag & UInt32(kFSEventStreamEventFlagMustScanSubDirs) != 0
                 ))
             }
             watcher.handler(events)

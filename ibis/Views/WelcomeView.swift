@@ -72,9 +72,11 @@ struct WelcomeView: View {
         // Finder / CLI opens that arrive at launch: turn them into editor
         // windows and close the launcher. Registering as a drain view also lets
         // the router open windows itself when every window is closed later.
+        // `drainViewAppeared` drains internally and hands back anything queued
+        // *before* this window appeared (a cold launch) — those must be opened
+        // here; a second `drain()` would find an already-empty queue.
         .onAppear {
-            _ = router.drainViewAppeared(opener: { openWindow(value: $0) })
-            drainPendingOpens()
+            openQueued(router.drainViewAppeared(opener: { openWindow(value: $0) }))
         }
         .onDisappear {
             router.drainViewDisappeared()
@@ -124,7 +126,10 @@ struct WelcomeView: View {
     }
 
     private func drainPendingOpens() {
-        let pending = router.drain()
+        openQueued(router.drain())
+    }
+
+    private func openQueued(_ pending: [WorkspaceRef]) {
         guard !pending.isEmpty else { return }
         for ref in pending { openWindow(value: ref) }
         dismiss()

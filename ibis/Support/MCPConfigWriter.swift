@@ -296,10 +296,21 @@ nonisolated enum MCPConfigWriter {
 
     /// Whether `contents` has a real (non-commented) `[name]` table header.
     private static func tomlHasTable(named name: String, in contents: String) -> Bool {
-        let header = "[\(name)]"
-        return contents
+        contents
             .components(separatedBy: "\n")
-            .contains { $0.trimmingCharacters(in: .whitespaces) == header }
+            .contains { isTOMLHeader(line: $0, header: "[\(name)]") }
+    }
+
+    /// Whether a line *is* the given table header — exactly, or followed only
+    /// by an inline comment (`[t] # note`), which TOML permits. Detection and
+    /// the replacement scan must share this rule: if they disagreed, a
+    /// commented variant would read as "present" while the scan matched no
+    /// line, silently writing the file back unchanged.
+    private static func isTOMLHeader(line: String, header: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(header) else { return false }
+        let rest = trimmed.dropFirst(header.count).trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty || rest.hasPrefix("#")
     }
 
     /// Replaces an existing `[name]` table (up to the next table header or EOF)
@@ -317,15 +328,14 @@ nonisolated enum MCPConfigWriter {
         var output: [String] = []
         var skipping = false
         for line in contents.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed == header {
+            if isTOMLHeader(line: line, header: header) {
                 skipping = true
                 output.append(contentsOf: block.components(separatedBy: "\n"))
                 continue
             }
             if skipping {
                 // Stop skipping at the next table header.
-                if trimmed.hasPrefix("[") { skipping = false } else { continue }
+                if line.trimmingCharacters(in: .whitespaces).hasPrefix("[") { skipping = false } else { continue }
             }
             output.append(line)
         }

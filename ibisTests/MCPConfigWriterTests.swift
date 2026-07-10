@@ -223,6 +223,27 @@ import Foundation
         }
     }
 
+    @Test func codexTableHeaderWithInlineCommentIsStillReplaced() throws {
+        try TestSupport.withTempDir { root in
+            // TOML permits a comment after the header; detection and the
+            // replacement scan must agree on that or writes silently no-op.
+            let dir = root.appending(path: ".codex")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let existing = """
+            [mcp_servers.ibis]  # managed by Ibis
+            url = "http://127.0.0.1:1/mcp"
+            stale = true
+            """
+            try existing.write(to: dir.appending(path: "config.toml"), atomically: true, encoding: .utf8)
+            #expect(MCPConfigWriter.projectState(agent: .codex, projectRoot: root) == .ibisPresent)
+
+            _ = try MCPConfigWriter.write(agent: .codex, projectRoot: root, port: 4242, token: "t")
+            let toml = try String(contentsOf: dir.appending(path: "config.toml"), encoding: .utf8)
+            #expect(toml.contains(#"url = "http://127.0.0.1:4242/mcp""#))
+            #expect(!toml.contains("stale = true"))
+        }
+    }
+
     // MARK: Legacy hardcoded-entry detection & upgrade
 
     private func writeLegacyConfig(in root: URL, extraServer: Bool = false) throws -> URL {
