@@ -6,6 +6,15 @@ import CoreServices
 /// paths (a created/deleted/renamed file surfaces as a change to its parent
 /// directory), which is exactly what we need to reload a node's children.
 final class FileSystemWatcher {
+    /// One reported change: the directory whose contents changed, plus whether
+    /// FSEvents flagged it `MustScanSubDirs` — meaning events were coalesced or
+    /// dropped (kernel queue overflow during heavy churn) and *everything below*
+    /// the path may have changed, not just its immediate children.
+    struct Event {
+        let path: String
+        let mustScanSubDirs: Bool
+    }
+
     /// A heap box holding a *weak* back-reference to the watcher. FSEvents retains
     /// this box (not the watcher) for the stream's lifetime and releases it via
     /// the context's release callback when the stream is torn down. Because the
@@ -17,9 +26,9 @@ final class FileSystemWatcher {
     }
 
     private var stream: FSEventStreamRef?
-    private let handler: ([String]) -> Void
+    private let handler: ([Event]) -> Void
 
-    init?(path: String, handler: @escaping ([String]) -> Void) {
+    init?(path: String, handler: @escaping ([Event]) -> Void) {
         self.handler = handler
 
         let box = WeakBox()
@@ -35,13 +44,22 @@ final class FileSystemWatcher {
         )
 
         let flags = UInt32(kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagUseCFTypes)
-        let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
+        let callback: FSEventStreamCallback = { _, info, numEvents, eventPaths, eventFlags, _ in
             guard let info else { return }
             let box = Unmanaged<WeakBox>.fromOpaque(info).takeUnretainedValue()
             guard let watcher = box.watcher else { return }
             let cfPaths = Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue()
             let paths = (cfPaths as NSArray).compactMap { $0 as? String }
-            watcher.handler(paths)
+            var events: [Event] = []
+            events.reserveCapacity(paths.count)
+            for (index, path) in paths.enumerated() where index < numEvents {
+                let flags = eventFlags[index]
+                events.append(Event(
+                    path: path,
+                    mustScanSubDirs: flags & UInt32(kFSEventStreamEventFlagMustScanSubDirs) != 0
+                ))
+            }
+            watcher.handler(events)
         }
 
         guard let stream = FSEventStreamCreate(

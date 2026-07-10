@@ -62,6 +62,26 @@ import Foundation
         }
     }
 
+    @Test func wholeWordMatchesQueriesWithNonWordEdges() throws {
+        try TestSupport.withTempDir { dir in
+            // One candidate per line (only the first match per line is
+            // reported). `\b` beside a non-word character can never match, so
+            // these queries used to return zero results.
+            try write("let x = foo() + 1\ncall myfoo() now\n$state here\nrecount -count count", to: dir.appending(path: "a.txt"))
+
+            let foo = search(root: dir, query: "foo()", wholeWord: true).files.first?.matches
+            #expect(foo?.count == 1)
+            #expect(foo?.first?.lineNumber == 1) // myfoo() is still excluded
+
+            let state = search(root: dir, query: "$state", wholeWord: true).files.first?.matches
+            #expect(state?.count == 1)
+
+            let count = search(root: dir, query: "-count", wholeWord: true).files.first?.matches
+            #expect(count?.count == 1)
+            #expect(count?.first?.matchColumnRange.location == 8)
+        }
+    }
+
     @Test func regexMatches() throws {
         try TestSupport.withTempDir { dir in
             try write("foo123\nbar\nbaz456", to: dir.appending(path: "a.txt"))
@@ -112,5 +132,39 @@ import Foundation
             #expect(results.summary.scannedFiles == 1)
             #expect(results.files.first?.matches.count == 1)
         }
+    }
+
+    // MARK: Re-anchoring a result against a live (possibly edited) buffer
+
+    private func makeMatch(lineText: String, column: NSRange, absolute: NSRange) -> SearchMatch {
+        SearchMatch(lineNumber: 1, lineText: lineText, matchColumnRange: column, characterRange: absolute)
+    }
+
+    @Test func resolvedSelectionKeepsAStillValidRange() {
+        let content = "aaa\nfind me\n" as NSString
+        let match = makeMatch(lineText: "find me", column: NSRange(location: 5, length: 2), absolute: NSRange(location: 9, length: 2))
+        #expect(ProjectSearch.resolvedSelection(for: match, in: content) == NSRange(location: 9, length: 2))
+    }
+
+    @Test func resolvedSelectionReanchorsAfterEditsAboveTheMatch() {
+        // Three lines inserted above shift every offset; the stale range now
+        // covers "\nf". The nearest occurrence of the matched text wins.
+        let content = "x\ny\nz\naaa\nfind me\n" as NSString
+        let match = makeMatch(lineText: "find me", column: NSRange(location: 5, length: 2), absolute: NSRange(location: 9, length: 2))
+        #expect(ProjectSearch.resolvedSelection(for: match, in: content) == NSRange(location: 15, length: 2))
+    }
+
+    @Test func resolvedSelectionPicksTheNearestOfSeveralOccurrences() {
+        let content = "me ... me ... me" as NSString // offsets 0, 7, 14
+        let match = makeMatch(lineText: "xx me xx", column: NSRange(location: 3, length: 2), absolute: NSRange(location: 8, length: 2))
+        #expect(ProjectSearch.resolvedSelection(for: match, in: content) == NSRange(location: 7, length: 2))
+    }
+
+    @Test func resolvedSelectionFallsBackToACaretWhenTheTextIsGone() {
+        let content = "nothing to see" as NSString
+        let match = makeMatch(lineText: "find me", column: NSRange(location: 5, length: 2), absolute: NSRange(location: 40, length: 2))
+        // Selecting whatever now sits at the stale offsets would highlight
+        // arbitrary text; a clamped caret is the honest fallback.
+        #expect(ProjectSearch.resolvedSelection(for: match, in: content) == NSRange(location: 14, length: 0))
     }
 }

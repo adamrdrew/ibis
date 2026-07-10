@@ -43,7 +43,7 @@ import Foundation
     }
 
     @Test func launchCommandPinsSessionIdOnFreshClaudeLaunch() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""
@@ -57,7 +57,7 @@ import Foundation
     }
 
     @Test func launchCommandKeepsSystemPromptOnResume() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""
@@ -75,7 +75,7 @@ import Foundation
     }
 
     @Test func launchCommandRejectsMalformedSessionIDs() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""
@@ -93,7 +93,7 @@ import Foundation
     }
 
     @Test func launchCommandIgnoresSessionForNonClaudeAgent() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "codex"
             settings.agentArgs = ""
@@ -159,7 +159,7 @@ import Foundation
     }
 
     @Test func agentRelaunchCommandPicksResumeOrRePin() async throws {
-        try await TestSupport.withIsolatedDefaults {
+        try TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""

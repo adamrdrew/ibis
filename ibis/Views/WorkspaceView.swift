@@ -43,8 +43,14 @@ struct WorkspaceView: View {
                 MCPBannerView(text: banner)
                     .padding(.top, 8)
                     .transition(.move(edge: .top).combined(with: .opacity))
-                    .task(id: banner) {
+                    // Keyed on the epoch (not the text) so a repost of the same
+                    // message restarts the timer. The cancellation guard matters:
+                    // when a new banner replaces this one, `Task.sleep` throws,
+                    // `try?` swallows it, and falling through would wipe the
+                    // *new* banner a frame after it appeared.
+                    .task(id: bridge.bannerEpoch) {
                         try? await Task.sleep(for: .seconds(4))
+                        guard !Task.isCancelled else { return }
                         bridge.banner = nil
                         bridge.bannerToken = nil
                     }
@@ -57,7 +63,7 @@ struct WorkspaceView: View {
                 ProjectSettingsView(
                     config: workspace.projectConfig,
                     workspace: workspace,
-                    commit: { workspace.commitProjectSettings() },
+                    commit: { try workspace.commitProjectSettings() },
                     dismiss: { workspace.projectSettingsRequested = false }
                 )
             }
@@ -261,6 +267,10 @@ struct WorkspaceView: View {
         .onDisappear {
             if let workspace {
                 workspace.resolvePendingDiff(apply: false)
+                // Same for a blocking ask_human sheet: its completion handler
+                // never fires when the window closes, so resolve it explicitly
+                // or the agent's MCP request hangs forever.
+                MCPBridge.shared.cancelPrompts(for: workspace)
                 MCPBridge.shared.unregister(workspace)
                 // Kill this window's shells/agents/actions. Nothing else does:
                 // SwiftTerm's pending PTY read keeps each process object alive
@@ -280,10 +290,27 @@ struct WorkspaceView: View {
             }
         }
         .task(id: ref) {
+            // The sibling `.task` above also starts the MCP server, but the two
+            // tasks have no ordering guarantee. `apply` is idempotent, so kick
+            // it here too and wait for the bind to settle — otherwise a cold
+            // `ibis --agent` launch (or an agent-tab restore) can race the
+            // transport and start the agent with no Ibis tools for its whole
+            // session.
+            MCPService.apply(settings: settings)
+            await MCPService.awaitReady()
             let workspace = Workspace(rootURL: ref.url, isDirectory: ref.isDirectory)
             workspace.settings = settings
             self.workspace = workspace
             MCPBridge.shared.register(workspace)
+            // Every terminal/agent session in this window gets the project's MCP
+            // token: Codex reads it via bearer_token_env_var, and a hand-run
+            // `claude` picks it up through the `${IBIS_MCP_TOKEN}` reference in
+            // .mcp.json. Without it the written configs authenticate nothing and
+            // the agent silently has no Ibis tools. Inert while MCP is off.
+            if MCPService.isAvailable {
+                workspace.terminal.extraLaunchEnvironment["IBIS_MCP_TOKEN"] =
+                    MCPBridge.shared.token(for: workspace)
+            }
             await workspace.rootNode.loadChildren()
             workspace.refreshRootEmptiness()
             // Reopen the tabs/panes/selection and terminal dock from the last
@@ -450,7 +477,13 @@ struct WorkspaceView: View {
     }
 
     private func launchAgent(in workspace: Workspace) {
-        workspace.launchConfiguredAgent(settings: settings)
+        Task {
+            // The MCP transport binds asynchronously (and a port change restarts
+            // it after a delay); launching before it settles reads no port and
+            // silently starts the agent without Ibis tools.
+            await MCPService.awaitReady()
+            workspace.launchConfiguredAgent(settings: settings)
+        }
     }
 
     /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
@@ -631,12 +664,17 @@ struct WorkspaceView: View {
         }
     }
 
-    private func openSearchResult(_ url: URL, _ range: NSRange) {
+    private func openSearchResult(_ url: URL, _ match: SearchMatch) {
         guard let workspace else { return }
         Task {
             let document = workspace.document(for: url)
             await document.loadIfNeeded()
-            document.pendingSelection = range
+            // The match's offsets came from the *disk* copy; in a buffer with
+            // unsaved edits they can land on arbitrary text. Re-anchor against
+            // the live buffer rather than blindly selecting the stale range.
+            document.pendingSelection = ProjectSearch.resolvedSelection(
+                for: match, in: document.text as NSString
+            )
             workspace.layout.activePane?.open(document)
         }
     }

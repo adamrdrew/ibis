@@ -147,6 +147,27 @@ import AppKit
         }
     }
 
+    @Test func reloadMergingReplacesANodeWhoseKindChanged() async throws {
+        try await TestSupport.withTempDir { dir in
+            let fm = FileManager.default
+            let path = dir.appending(path: "notes")
+            fm.createFile(atPath: path.path, contents: Data())
+
+            let node = FileNode(url: dir, isDirectory: true)
+            await node.loadChildren()
+            #expect(node.children?.first { $0.name == "notes" }?.isDirectory == false)
+
+            // `rm notes && mkdir notes` coalesced into one reload: the URL is
+            // unchanged but the kind flipped, so the node must be rebuilt —
+            // `isDirectory` is immutable, and reusing the old node leaves a
+            // directory that can never be expanded.
+            try fm.removeItem(at: path)
+            try fm.createDirectory(at: path, withIntermediateDirectories: false)
+            await node.reloadChildrenMerging()
+            #expect(node.children?.first { $0.name == "notes" }?.isDirectory == true)
+        }
+    }
+
     @Test func reloadMergingBeforeLoadIsNoOp() async throws {
         try await TestSupport.withTempDir { dir in
             let node = FileNode(url: dir, isDirectory: true)
@@ -284,8 +305,8 @@ import AppKit
             let canonicalRoot = dir.resolvingSymlinksInPath().path
 
             let hits = LockedBox<[String]>(initialState: [])
-            let watcher = FileSystemWatcher(path: dir.path(percentEncoded: false)) { paths in
-                hits.withLock { $0.append(contentsOf: paths) }
+            let watcher = FileSystemWatcher(path: dir.path(percentEncoded: false)) { events in
+                hits.withLock { $0.append(contentsOf: events.map(\.path)) }
             }
             #expect(watcher != nil)
 

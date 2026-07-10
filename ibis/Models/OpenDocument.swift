@@ -146,9 +146,14 @@ final class OpenDocument: Identifiable {
     }
 
     /// Replaces the whole buffer without going through the undo manager, bumping
-    /// the version counters so editors re-sync.
+    /// the version counters so editors re-sync. Clears the undo stack here, in the
+    /// model: recorded undo actions hold ranges into the *old* text, and the
+    /// view-layer clear only runs for a mounted editor — an unmounted document
+    /// replaced by an external reload would otherwise replay an out-of-range undo
+    /// when its tab is reselected.
     private func replaceText(_ newValue: String) {
         storage.replaceCharacters(in: NSRange(location: 0, length: storage.length), with: newValue)
+        undoManager.removeAllActions()
         contentVersion += 1
         editGeneration += 1
     }

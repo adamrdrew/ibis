@@ -40,15 +40,15 @@ import AppKit
             await #expect(throws: MCPBridgeError.self) {
                 _ = try await MCPBridge.shared.openFile(token: "bogus", path: "x.txt", line: nil)
             }
-            await #expect(throws: MCPBridgeError.self) {
+            #expect(throws: MCPBridgeError.self) {
                 _ = try MCPBridge.shared.workspaceRootPath(token: nil)
             }
         }
     }
 
     @Test func unregisterInvalidatesTheToken() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 let token = MCPBridge.shared.register(workspace)
                 MCPBridge.shared.unregister(workspace)
@@ -95,7 +95,7 @@ import AppKit
     }
 
     @Test func openFileReportsAMissingFile() async throws {
-        try await withBridgedWorkspace { _, token, _ in
+        _ = try await withBridgedWorkspace { _, token, _ in
             await #expect(throws: MCPToolFailure.self) {
                 _ = try await MCPBridge.shared.openFile(token: token, path: "missing.txt", line: nil)
             }
@@ -129,7 +129,7 @@ import AppKit
     }
 
     @Test func askHumanFailsHonestlyWithoutAWindow() async throws {
-        try await withBridgedWorkspace { _, token, _ in
+        _ = try await withBridgedWorkspace { _, token, _ in
             await #expect(throws: MCPBridgeError.self) {
                 _ = try await MCPBridge.shared.askHuman(token: token, question: "sure?", options: nil)
             }

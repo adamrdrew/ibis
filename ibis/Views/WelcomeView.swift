@@ -70,8 +70,15 @@ struct WelcomeView: View {
             return true
         }
         // Finder / CLI opens that arrive at launch: turn them into editor
-        // windows and close the launcher.
-        .onAppear(perform: drainPendingOpens)
+        // windows and close the launcher. Registering as a drain view also lets
+        // the router open windows itself when every window is closed later.
+        .onAppear {
+            _ = router.drainViewAppeared(opener: { openWindow(value: $0) })
+            drainPendingOpens()
+        }
+        .onDisappear {
+            router.drainViewDisappeared()
+        }
         .onChange(of: router.pendingCount) { _, count in
             if count > 0 { drainPendingOpens() }
         }

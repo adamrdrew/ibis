@@ -7,13 +7,15 @@ struct ProjectSettingsView: View {
     @Bindable var config: ProjectConfig
     /// The window's workspace, so the MCP section can write this project's config.
     var workspace: Workspace
-    /// Persist the config and re-apply env. Called on Done.
-    var commit: () -> Void
+    /// Persist the config and re-apply env. Called on Done; throws when the
+    /// write fails so the sheet can surface it instead of silently losing edits.
+    var commit: () throws -> Void
     var dismiss: () -> Void
 
     @Environment(AppSettings.self) private var settings
     @State private var mcpStatus: String?
     @State private var mcpIsError = false
+    @State private var saveError: String?
 
     var body: some View {
         NavigationStack {
@@ -39,8 +41,14 @@ struct ProjectSettingsView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") {
-                        commit()
-                        dismiss()
+                        do {
+                            try commit()
+                            dismiss()
+                        } catch {
+                            // Keep the sheet open: dismissing would make the
+                            // edits look committed when nothing reached disk.
+                            saveError = error.localizedDescription
+                        }
                     }
                     // Can't save over a file we couldn't parse (see loadError).
                     .disabled(config.loadError != nil)
@@ -48,6 +56,17 @@ struct ProjectSettingsView: View {
             }
         }
         .frame(width: 560, height: 540)
+        .alert(
+            "Couldn’t Save Project Settings",
+            isPresented: Binding(
+                get: { saveError != nil },
+                set: { if !$0 { saveError = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(saveError ?? "")
+        }
     }
 
     // MARK: - Actions

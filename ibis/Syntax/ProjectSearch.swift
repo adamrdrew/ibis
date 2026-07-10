@@ -133,10 +133,53 @@ nonisolated enum ProjectSearch {
         return SearchResults(files: results, summary: summary)
     }
 
+    // MARK: - Re-anchoring a result against a live buffer
+
+    /// The selection to use when opening `match` in a document whose buffer may
+    /// have diverged from disk (unsaved edits shift every offset below them).
+    /// If the stored range still covers the matched text it's used as-is;
+    /// otherwise the occurrence of the matched text *nearest* the original
+    /// location wins, and if the text is gone entirely the caret just lands at
+    /// the (clamped) original location with nothing selected — selecting
+    /// whatever now occupies the stale offsets would highlight arbitrary text.
+    static func resolvedSelection(for match: SearchMatch, in content: NSString) -> NSRange {
+        let stored = match.characterRange
+        let line = match.lineText as NSString
+        guard NSMaxRange(match.matchColumnRange) <= line.length else {
+            return NSRange(location: min(stored.location, content.length), length: 0)
+        }
+        let matched = line.substring(with: match.matchColumnRange)
+
+        if NSMaxRange(stored) <= content.length, content.substring(with: stored) == matched {
+            return stored
+        }
+
+        var best: NSRange?
+        var from = 0
+        while from < content.length {
+            let found = content.range(
+                of: matched, options: [],
+                range: NSRange(location: from, length: content.length - from)
+            )
+            guard found.location != NSNotFound else { break }
+            if let current = best,
+               abs(current.location - stored.location) <= abs(found.location - stored.location) {
+                // Occurrences only get farther away from here on.
+                break
+            }
+            best = found
+            from = found.location + max(found.length, 1)
+        }
+        return best ?? NSRange(location: min(stored.location, content.length), length: 0)
+    }
+
     // MARK: - Matcher construction
 
     /// Builds the line matcher, or returns `nil` for an invalid regex. Whole-word
-    /// is implemented as a `\b…\b` regex over the escaped literal.
+    /// is a regex over the escaped literal with `\b` added only on the sides that
+    /// begin/end with a word character — `\b` next to a non-word character (as in
+    /// `foo()`, `$state`, `-count`) can never match at a natural token boundary,
+    /// which made such queries return zero results.
     private static func makeMatcher(query: String, caseSensitive: Bool, useRegex: Bool, wholeWord: Bool) -> Matcher? {
         let regexOptions: NSRegularExpression.Options = caseSensitive ? [] : [.caseInsensitive]
         if useRegex {
@@ -144,12 +187,19 @@ nonisolated enum ProjectSearch {
             return .regex(regex)
         }
         if wholeWord {
-            let pattern = "\\b" + NSRegularExpression.escapedPattern(for: query) + "\\b"
+            let leading = isWordCharacter(query.unicodeScalars.first) ? "\\b" : ""
+            let trailing = isWordCharacter(query.unicodeScalars.last) ? "\\b" : ""
+            let pattern = leading + NSRegularExpression.escapedPattern(for: query) + trailing
             if let regex = try? NSRegularExpression(pattern: pattern, options: regexOptions) {
                 return .regex(regex)
             }
         }
         return .substring(query, caseSensitive ? [] : [.caseInsensitive])
+    }
+
+    private static func isWordCharacter(_ scalar: Unicode.Scalar?) -> Bool {
+        guard let scalar else { return false }
+        return scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
     }
 
     // MARK: - Per-file matching

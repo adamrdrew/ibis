@@ -85,11 +85,26 @@ struct FileOutlineView: NSViewRepresentable {
         /// The row the context menu was opened on, for the menu's @objc actions.
         private var contextNode: FileNode?
 
-        /// True while a rename is being committed (and its async reload is
-        /// pending), so the Return action and end-editing notification — which
-        /// both fire for one commit — don't run the rename twice (the second run
-        /// would fail against the now-missing old name and flash it back).
-        private var renameInFlight = false
+        /// Source URLs of renames whose async directory reload is still
+        /// pending, so the Return action and end-editing notification — which
+        /// both fire for one commit — don't run the rename twice (the second
+        /// run would fail against the now-missing old name and flash it back).
+        /// Keyed per file so a quick rename of a *different* row started while
+        /// an earlier rename's reload is pending isn't silently dropped.
+        private var renameSourcesInFlight: Set<URL> = []
+
+        /// True once the user has started typing in an inline-rename field
+        /// editor (`controlTextDidBeginEditing`). Combined with
+        /// `NSTableView.editedRow` (set from the start of an `editColumn`
+        /// session, before any keystroke) to detect an active rename.
+        private var isEditingName = false
+
+        /// Directory reloads that arrived while an inline rename was in
+        /// progress, applied in arrival order when editing ends. The root is
+        /// tracked as a flag (a root reload refreshes the whole tree, so it
+        /// supersedes any queued nodes).
+        private var pendingReloadNodes: [FileNode] = []
+        private var pendingRootReload = false
 
         private var accentObserver: NSObjectProtocol?
 
@@ -127,13 +142,18 @@ struct FileOutlineView: NSViewRepresentable {
         }
 
         /// Wire filesystem/operation reloads to `NSOutlineView.reloadItem`.
+        /// While an inline rename is in progress the reload is deferred, not
+        /// applied: reloading the edited row reconfigures its cell (`viewFor`
+        /// resets the text field) and tears down the field editor, which fires
+        /// `controlTextDidEndEditing` and would commit the user's half-typed
+        /// name as a real rename. Deferred reloads flush when editing ends.
         func installReloadBridge() {
             workspace.onDirectoryReloaded = { [weak self] node in
-                guard let self, let outlineView = self.outlineView else { return }
-                if node === self.workspace.rootNode {
-                    outlineView.reloadItem(nil, reloadChildren: true)
+                guard let self else { return }
+                if self.isRenameEditingActive {
+                    self.queuePendingReload(of: node)
                 } else {
-                    outlineView.reloadItem(node, reloadChildren: true)
+                    self.applyReload(of: node)
                 }
             }
             workspace.onRevealInTree = { [weak self] url in
@@ -144,6 +164,48 @@ struct FileOutlineView: NSViewRepresentable {
             if let pending = workspace.pendingReveal {
                 workspace.pendingReveal = nil
                 revealInTree(pending)
+            }
+        }
+
+        /// Whether an inline rename's field editor is (or may be) active.
+        /// `editedRow` covers `editColumn`-initiated sessions from before the
+        /// first keystroke; `isEditingName` covers editing begun by clicking
+        /// the text of a selected row (which never sets `editedRow`).
+        private var isRenameEditingActive: Bool {
+            isEditingName || (outlineView.map { $0.editedRow != -1 } ?? false)
+        }
+
+        private func applyReload(of node: FileNode) {
+            guard let outlineView else { return }
+            if node === workspace.rootNode {
+                outlineView.reloadItem(nil, reloadChildren: true)
+            } else {
+                outlineView.reloadItem(node, reloadChildren: true)
+            }
+        }
+
+        private func queuePendingReload(of node: FileNode) {
+            if node === workspace.rootNode {
+                pendingRootReload = true
+            } else if !pendingReloadNodes.contains(where: { $0 === node }) {
+                pendingReloadNodes.append(node)
+            }
+        }
+
+        /// Applies reloads that were deferred during an inline rename. A queued
+        /// root reload refreshes everything, so it supersedes queued nodes.
+        private func flushPendingReloads() {
+            guard pendingRootReload || !pendingReloadNodes.isEmpty else { return }
+            let nodes = pendingReloadNodes
+            let rootPending = pendingRootReload
+            pendingReloadNodes = []
+            pendingRootReload = false
+            if rootPending {
+                applyReload(of: workspace.rootNode)
+                return
+            }
+            for node in nodes {
+                applyReload(of: node)
             }
         }
 
@@ -302,16 +364,33 @@ struct FileOutlineView: NSViewRepresentable {
             performRename(from: sender)
         }
 
+        func controlTextDidBeginEditing(_ obj: Notification) {
+            isEditingName = true
+        }
+
         func controlTextDidEndEditing(_ obj: Notification) {
-            guard let field = obj.object as? NSTextField else { return }
-            performRename(from: field)
+            isEditingName = false
+            if let field = obj.object as? NSTextField {
+                performRename(from: field)
+            }
+            // Apply any FSEvents reloads that were held back during the edit.
+            flushPendingReloads()
         }
 
         private func performRename(from field: NSTextField) {
-            guard !renameInFlight, let node = node(forCellSubview: field) else { return }
+            guard let node = node(forCellSubview: field) else { return }
+            performRename(of: node, from: field)
+        }
+
+        /// Internal (not private) so tests can drive a rename without a live
+        /// field editor; `field` supplies the new name and is reverted on error.
+        func performRename(of node: FileNode, from field: NSTextField) {
+            let oldURL = node.url
+            // One commit fires twice (Return action + end-editing); only the
+            // first attempt for this source file may run.
+            guard !renameSourcesInFlight.contains(oldURL) else { return }
             let newName = field.stringValue
             guard newName != node.name else { return }
-            let oldURL = node.url
             let parent = oldURL.deletingLastPathComponent()
             let newURL: URL
             do {
@@ -321,13 +400,13 @@ struct FileOutlineView: NSViewRepresentable {
                 workspace.presentError("Couldn’t rename “\(node.name)”: \(error.localizedDescription)")
                 return
             }
-            renameInFlight = true
+            renameSourcesInFlight.insert(oldURL)
             // Re-point any open document at the renamed path so a later save
             // doesn't recreate the file under its old name.
             workspace.relocateOpenDocuments(from: oldURL, to: newURL)
             Task {
                 await workspace.reloadDirectory(at: parent)
-                renameInFlight = false
+                renameSourcesInFlight.remove(oldURL)
             }
         }
 
@@ -352,6 +431,17 @@ struct FileOutlineView: NSViewRepresentable {
 
         func outlineView(_ outlineView: NSOutlineView, pasteboardWriterForItem item: Any) -> NSPasteboardWriting? {
             (item as? FileNode)?.url as NSURL?
+        }
+
+        /// Internal drags: the session ending (dropped, cancelled, or released
+        /// outside the tree) must disarm any pending spring-load expand.
+        func outlineView(
+            _ outlineView: NSOutlineView,
+            draggingSession session: NSDraggingSession,
+            endedAt screenPoint: NSPoint,
+            operation: NSDragOperation
+        ) {
+            cancelSpring()
         }
 
         /// Schedules (or cancels) an auto-expand for a collapsed folder hovered
@@ -383,12 +473,17 @@ struct FileOutlineView: NSViewRepresentable {
             proposedItem item: Any?,
             proposedChildIndex index: Int
         ) -> NSDragOperation {
+            // Spring-load bookkeeping first — before any early return — so a
+            // drag that moves off a hovered collapsed folder (onto a file row,
+            // say) cancels the pending expand instead of leaving it armed to
+            // fire after the drag has moved on or ended. `scheduleSpring`
+            // cancels for anything that isn't a collapsed folder, and (re)arms
+            // when hovering one.
+            scheduleSpring(for: item as? FileNode, in: outlineView)
+
             // Only drop onto directories (or the root when item is nil).
             if let node = item as? FileNode, !node.isDirectory { return [] }
             outlineView.setDropItem(item, dropChildIndex: NSOutlineViewDropOnItemIndex)
-
-            // Spring-load: hovering a collapsed folder during a drag expands it.
-            scheduleSpring(for: item as? FileNode, in: outlineView)
 
             let optionHeld = info.draggingSourceOperationMask == .copy
             let isInternal = (info.draggingSource as? NSOutlineView) === outlineView
@@ -760,6 +855,13 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
         coordinator?.cancelSpring()
         super.draggingExited(sender)
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        // External (e.g. Finder-sourced) drags don't hit the data source's
+        // session-ended callback, so disarm any pending spring-load here too.
+        coordinator?.cancelSpring()
+        super.draggingEnded(sender)
     }
 
     // MARK: - Quick Look panel control

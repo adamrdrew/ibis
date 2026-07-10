@@ -53,6 +53,14 @@ import Foundation
         }
     }
 
+    @Test func agentPathReferenceEscapesEmbeddedQuotes() async throws {
+        try await withWorkspace { workspace, dir in
+            let file = dir.appending(path: "say \"hi\".txt")
+            // The quoted token must stay well-formed: `"say \"hi\".txt"`.
+            #expect(workspace.agentPathReference(for: file) == "\"say \\\"hi\\\".txt\"")
+        }
+    }
+
     @Test func agentPathReferenceFallsBackToAbsoluteOutsideRoot() async throws {
         try await withWorkspace { workspace, _ in
             let outside = URL(fileURLWithPath: "/opt/elsewhere/file.txt")
@@ -69,8 +77,8 @@ import Foundation
     }
 
     @Test func singleFileWorkspaceUsesParentAsProjectRoot() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let file = try writeFile("solo.txt", "x", in: dir)
                 let workspace = Workspace(rootURL: file, isDirectory: false)
                 #expect(workspace.projectRoot.resolvingSymlinksInPath().path
@@ -99,7 +107,7 @@ import Foundation
     }
 
     @Test func cacheCollapsesSymlinkSpellingsOfTheSameFile() async throws {
-        try await TestSupport.withIsolatedDefaults {
+        try TestSupport.withIsolatedDefaults {
             // /tmp is a symlink to /private/tmp on macOS — the classic two
             // spellings of one file.
             let name = "ibis-symlink-test-\(UUID().uuidString)"
@@ -339,6 +347,134 @@ import Foundation
         }
     }
 
+    @Test func restoreRemapsTheActivePaneWhenAPaneIsDropped() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let b = dir.appending(path: "b.txt")
+                let c = dir.appending(path: "c.txt")
+                try "b".write(to: b, atomically: true, encoding: .utf8)
+                try "c".write(to: c, atomically: true, encoding: .utf8)
+                // Three persisted panes; the first pane's only file is gone and
+                // the *middle* pane was active. The persisted index (1) points
+                // into the original list — after the dead pane is dropped it
+                // must still activate b.txt's pane, not shift onto c.txt's.
+                let state = PersistedWorkspaceState(
+                    paneFilePaths: [
+                        [dir.appending(path: "gone.txt").path(percentEncoded: false)],
+                        [b.path(percentEncoded: false)],
+                        [c.path(percentEncoded: false)],
+                    ],
+                    selectedTabPerPane: [0, 0, 0],
+                    activePaneIndex: 1,
+                    savedAt: Date()
+                )
+                WorkspaceStateStore.save(state, for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                await workspace.restorePersistedLayout()
+                #expect(workspace.layout.panes.count == 2)
+                let active = try #require(workspace.layout.activePane)
+                #expect(active.selectedDocument?.url?.lastPathComponent == "b.txt")
+            }
+        }
+    }
+
+    @Test func goToLineReachesTheTrailingEmptyLine() async throws {
+        try await withWorkspace { workspace, dir in
+            let url = try writeFile("a.txt", "a\nb\n", in: dir)
+            let document = workspace.document(for: url)
+            await document.loadIfNeeded()
+            workspace.layout.activePane?.open(document)
+
+            // Line 3 is the empty line after the trailing newline: caret at the
+            // very end, nothing selected (clamping used to select line 2).
+            workspace.goToLine(3)
+            #expect(document.pendingSelection == NSRange(location: 4, length: 0))
+
+            // Ordinary lines still select the whole line.
+            workspace.goToLine(2)
+            #expect(document.pendingSelection == NSRange(location: 2, length: 2))
+        }
+    }
+
+    @Test func closingATabEvictsItsCleanBuffer() async throws {
+        try await withWorkspace { workspace, dir in
+            let url = try writeFile("a.txt", "hello", in: dir)
+            let document = workspace.document(for: url)
+            await document.loadIfNeeded()
+            let pane = try #require(workspace.layout.activePane)
+            pane.open(document)
+            #expect(workspace.openedDocument(for: url) != nil)
+
+            workspace.requestCloseTab(document, in: pane)
+            // A clean close must drop the cache entry, or the buffer (and its
+            // undo stack) lives — and gets re-stat'ed on every FSEvents batch —
+            // for the window's lifetime.
+            #expect(await TestSupport.waitUntil { workspace.openedDocument(for: url) == nil })
+        }
+    }
+
+    @Test func closingATabKeepsTheBufferWhileOpenInAnotherPane() async throws {
+        try await withWorkspace { workspace, dir in
+            let url = try writeFile("a.txt", "hello", in: dir)
+            let document = workspace.document(for: url)
+            await document.loadIfNeeded()
+            let pane = try #require(workspace.layout.activePane)
+            pane.open(document)
+            workspace.splitActiveEditor()
+            let second = try #require(workspace.layout.panes.last)
+            second.open(document)
+
+            workspace.requestCloseTab(document, in: second)
+            _ = await TestSupport.waitUntil { !second.tabDocuments.contains { $0.id == document.id } }
+            #expect(workspace.openedDocument(for: url) === document)
+        }
+    }
+
+    @Test func applyProposedEditCreatesAMissingFile() async throws {
+        try await withWorkspace { workspace, dir in
+            let url = dir.appending(path: "new").appending(path: "file.txt")
+            let outcome = await workspace.applyProposedEdit(url: url, content: "created", replacing: "")
+            #expect(outcome == .applied)
+            #expect(try String(contentsOf: url, encoding: .utf8) == "created")
+            // The created file is open and healthy, not a poisoned cache entry.
+            let document = try #require(workspace.openedDocument(for: url))
+            #expect(document.text == "created")
+            #expect(document.isEditable)
+        }
+    }
+
+    @Test func applyProposedEditToAMissingFileGuardsItsBaseline() async throws {
+        try await withWorkspace { workspace, dir in
+            // The approved diff was computed against content that supposedly
+            // exists; if the file is gone, applying would fabricate state the
+            // human never reviewed.
+            let url = dir.appending(path: "ghost.txt")
+            let outcome = await workspace.applyProposedEdit(url: url, content: "x", replacing: "old contents")
+            #expect(outcome == .staleContent)
+            #expect(!FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
+    @Test func singleFileWorkspaceReconcilesExternalChanges() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let file = try writeFile("solo.txt", "original", in: dir)
+                let workspace = Workspace(rootURL: file, isDirectory: false)
+                let document = workspace.document(for: file)
+                await document.loadIfNeeded()
+                workspace.layout.activePane?.open(document)
+                #expect(document.text == "original")
+
+                // A single-file workspace watches its enclosing folder; an
+                // external rewrite must reload the clean buffer (before the fix
+                // no watcher existed and ⌘S would clobber the external change).
+                try "changed".write(to: file, atomically: true, encoding: .utf8)
+                #expect(await TestSupport.waitUntil(timeout: 10) { document.text == "changed" })
+            }
+        }
+    }
+
     @Test func restoreDoesNothingWhenTabsAreAlreadyOpen() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
@@ -551,8 +687,8 @@ import Foundation
     }
 
     @Test func launchConfiguredAgentPinsClaudeSession() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let settings = AppSettings()
                 settings.agentCommand = "claude"
                 settings.agentArgs = ""
@@ -640,8 +776,8 @@ import Foundation
     // MARK: Trust & project actions
 
     @Test func untrustedFolderWithExecutableConfigPromptsAndWithholdsEnv() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let config = #"{"env": {"FOO": "bar"}, "actions": [{"name": "build", "command": "make"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
 
@@ -661,8 +797,8 @@ import Foundation
     }
 
     @Test func grantingTrustAppliesEnvAndExposesActions() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let config = #"{"env": {"FOO": "bar"}, "actions": [{"name": "build", "command": "make"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
 
@@ -688,8 +824,8 @@ import Foundation
     }
 
     @Test func runProjectActionIsNoOpWhenUntrusted() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let config = #"{"actions": [{"name": "evil", "command": "true"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
@@ -704,7 +840,7 @@ import Foundation
         try await withWorkspace { workspace, _ in
             #expect(workspace.trustPromptNeeded == false)
             workspace.projectConfig.envVars = [ProjectConfig.EnvVar(key: "K", value: "v")]
-            workspace.commitProjectSettings()
+            try workspace.commitProjectSettings()
             #expect(workspace.trustPromptNeeded)
         }
     }
@@ -839,8 +975,8 @@ import Foundation
     }
 
     @Test func trustedProjectActionRunsAndStops() async throws {
-        try await TestSupport.withIsolatedDefaults {
-            try await TestSupport.withTempDir { dir in
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
                 let config = #"{"actions": [{"name": "noop", "command": "true"}]}"#
                 try config.write(to: dir.appending(path: ".ibis.json"), atomically: true, encoding: .utf8)
                 let workspace = Workspace(rootURL: dir, isDirectory: true)

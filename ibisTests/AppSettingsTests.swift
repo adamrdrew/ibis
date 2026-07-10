@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 @Suite(.serialized) struct AppSettingsTests {
     @Test func freshDefaultsProduceSaneSettings() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             #expect(settings.fontName == "SF Mono")
             #expect(settings.fontSize == 13)
@@ -24,7 +24,7 @@ import Foundation
     }
 
     @Test func changesPersistAcrossInstances() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let first = AppSettings()
             first.fontSize = 15
             first.terminalPlacement = .trailing
@@ -38,7 +38,7 @@ import Foundation
     }
 
     @Test func mcpTokenIsGeneratedOnceAndRoundTrips() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let first = AppSettings()
             let token = first.mcpToken
             #expect(!token.isEmpty)
@@ -57,7 +57,7 @@ import Foundation
     }
 
     @Test func agentCommandLineComposesCommandAndArgs() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentArgs = ""
@@ -80,7 +80,7 @@ import Foundation
     // MARK: MCPService.launchCommand
 
     @Test func launchCommandIsNilWithoutAnAgent() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = ""
             #expect(MCPService.launchCommand(settings: settings) == nil)
@@ -88,7 +88,7 @@ import Foundation
     }
 
     @Test func launchCommandPassesThroughWhenMCPIsOff() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.mcpEnabled = false
@@ -97,7 +97,7 @@ import Foundation
     }
 
     @Test func launchCommandPassesThroughForNonClaudeAgents() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "codex"
             settings.agentKind = .codex
@@ -107,7 +107,7 @@ import Foundation
     }
 
     @Test func launchCommandInjectsOrientationForClaudeWithMCP() async throws {
-        try await TestSupport.withIsolatedDefaults {
+        try TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "claude"
             settings.agentKind = .claude

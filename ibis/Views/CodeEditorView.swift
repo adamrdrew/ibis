@@ -105,8 +105,30 @@ struct CodeEditorView: NSViewRepresentable {
         syncCoordinator(context.coordinator)
         context.coordinator.language = Language.highlightName(for: document.url)
         context.coordinator.lastContentVersion = document.contentVersion
-        context.coordinator.hasScrolledToStart = false
-        context.coordinator.suppressStartScroll = document.pendingSelection != nil
+        // Seed the focus token with the pane's *current* value: the token is
+        // monotonic and never resets, while this coordinator is fresh per tab
+        // mount (`.id(document.id)`) — starting at 0 would make every newly
+        // mounted editor see a "new" token and steal first responder (e.g.
+        // yanking keyboard focus out of the terminal when an agent opens a tab).
+        context.coordinator.lastFocusRequest = focusRequest
+        // Redraw the gutter on *storage-level* edits too, so a sibling pane
+        // sharing this buffer updates its line numbers without its own
+        // textDidChange (which only fires in the pane where the edit happened).
+        context.coordinator.observeStorage(textStorage)
+
+        // Position the viewport now, synchronously — never from the async
+        // highlight completion, which on large files lands after the user has
+        // started scrolling and would yank them back to the top.
+        if document.isLoaded {
+            context.coordinator.hasScrolledToStart = true
+            if document.pendingSelection == nil {
+                context.coordinator.restoreViewportAfterMount()
+            }
+        } else {
+            // Content arrives via the first contentVersion bump (async load);
+            // updateNSView scrolls to the start at that moment.
+            context.coordinator.hasScrolledToStart = false
+        }
         context.coordinator.scheduleHighlight(debounced: false)
 
         return scrollView
@@ -116,6 +138,7 @@ struct CodeEditorView: NSViewRepresentable {
     /// goes away, so closing/reopening panes doesn't accumulate layout managers
     /// (and redundant highlight passes) on a long-lived document buffer.
     static func dismantleNSView(_ scrollView: NSScrollView, coordinator: Coordinator) {
+        coordinator.saveSelectionForRemount()
         coordinator.detachFromStorage()
     }
 
@@ -137,8 +160,16 @@ struct CodeEditorView: NSViewRepresentable {
         if context.coordinator.lastContentVersion != document.contentVersion {
             context.coordinator.lastContentVersion = document.contentVersion
             needsHighlight = true
-            context.coordinator.hasScrolledToStart = false
-            context.coordinator.suppressStartScroll = document.pendingSelection != nil
+            // First content arrival for a freshly opened (still-loading) editor:
+            // position at the document start now, synchronously. Established
+            // editors keep their scroll position across an external reload or
+            // applied agent edit instead of being yanked to the top.
+            context.coordinator.scrollToStartIfNeeded()
+            // A programmatic replacement doesn't fire textDidChange, so resize
+            // the gutter here — a file that grows externally (say 900 → 12,000
+            // lines) would otherwise draw its line numbers clipped.
+            ruler.updateThickness()
+            ruler.needsDisplay = true
             // Clear only *this document's* undo stack. Because the text view uses
             // the document-scoped undo manager (see undoManager(for:)), this can't
             // wipe another file's history shown in a sibling pane.
@@ -290,6 +321,9 @@ struct CodeEditorView: NSViewRepresentable {
         weak var ruler: LineNumberRulerView?
         private var boundsObserver: NSObjectProtocol?
         private var accentObserver: NSObjectProtocol?
+        private var storageObserver: NSObjectProtocol?
+        /// Coalesces storage-edit gutter refreshes to one per runloop turn.
+        private var gutterRefreshScheduled = false
 
         init(document: OpenDocument) {
             self.document = document
@@ -319,6 +353,40 @@ struct CodeEditorView: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     self?.ruler?.needsDisplay = true
                 }
+            }
+        }
+
+        /// Refreshes this editor's gutter whenever the *shared* storage's
+        /// characters change, so an edit typed in a sibling pane (same document
+        /// in a split) updates this pane's line numbers too — its own
+        /// `textDidChange` only fires in the pane where the edit happened.
+        /// Deferred to the next runloop turn: `updateThickness` measures text
+        /// and can retile the scroll view, which must not run from inside
+        /// TextKit's editing notifications.
+        func observeStorage(_ storage: NSTextStorage) {
+            storageObserver = NotificationCenter.default.addObserver(
+                forName: NSTextStorage.didProcessEditingNotification,
+                object: storage,
+                queue: nil
+            ) { [weak self] notification in
+                MainActor.assumeIsolated {
+                    // Attribute-only passes (the syntax highlighter) can't
+                    // change line numbers; only react to character edits.
+                    guard let storage = notification.object as? NSTextStorage,
+                          storage.editedMask.contains(.editedCharacters) else { return }
+                    self?.scheduleGutterRefresh()
+                }
+            }
+        }
+
+        private func scheduleGutterRefresh() {
+            guard !gutterRefreshScheduled else { return }
+            gutterRefreshScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.gutterRefreshScheduled = false
+                self.ruler?.updateThickness()
+                self.ruler?.needsDisplay = true
             }
         }
 
@@ -415,8 +483,6 @@ struct CodeEditorView: NSViewRepresentable {
             textView.insertionPointColor = .ibisAccent
             ruler?.backgroundColor = backgroundColor
             ruler?.needsDisplay = true
-
-            scrollToStartIfNeeded()
         }
 
         /// Resets the document to the default text color (used for unrecognized
@@ -430,8 +496,6 @@ struct CodeEditorView: NSViewRepresentable {
             storage.endEditing()
             textView.backgroundColor = NSColor.textBackgroundColor
             ruler?.backgroundColor = NSColor.textBackgroundColor
-
-            scrollToStartIfNeeded()
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -465,21 +529,63 @@ struct CodeEditorView: NSViewRepresentable {
         /// True while a pending-selection application is queued, so repeated
         /// `updateNSView` passes don't schedule it (or clear the flag) twice.
         var pendingSelectionScheduled = false
-        /// One-shot: after a document loads, scroll to the very start so the
-        /// text isn't left offset a few characters to the right. Suppressed when
-        /// the document opened with a target selection (e.g. from search).
+        /// One-shot: whether this editor's initial viewport positioning has
+        /// happened (at mount for a loaded document, or on the first content
+        /// arrival for a still-loading one). Once consumed, nothing else may
+        /// move the viewport — in particular, not the async highlight pass.
         var hasScrolledToStart = false
-        var suppressStartScroll = false
         /// The last focus token applied, so a repeated `updateNSView` doesn't
-        /// steal focus on every layout pass.
+        /// steal focus on every layout pass. Seeded at mount with the pane's
+        /// current (monotonic, never-reset) token so only requests issued
+        /// *after* mount grab focus.
         var lastFocusRequest = 0
         private var highlightTask: Task<Void, Never>?
 
-        /// Scrolls the editor to the leading edge of the document using the
-        /// standard text API. Safe to call at any time.
+        /// Selections saved at editor teardown, keyed by document id, so
+        /// switching tabs A→B→A restores A's caret and approximate scroll
+        /// position. Entries are a single `NSRange` per unique document id,
+        /// so the cache stays negligibly small and isn't evicted.
+        static var savedSelections: [OpenDocument.ID: NSRange] = [:]
+
+        /// Records the current selection so the next mount of this document
+        /// (tab switch back) can restore the caret and scroll position.
+        func saveSelectionForRemount() {
+            guard let textView else { return }
+            Self.savedSelections[document.id] = textView.selectedRange()
+        }
+
+        /// Initial viewport positioning for a mounted, already-loaded document:
+        /// restores the selection saved at the last teardown (tab switch), or
+        /// scrolls to the document start on a first-time mount. Only called
+        /// when there is no pending selection — that path positions itself and
+        /// must win. Never called from the async highlight completion.
+        func restoreViewportAfterMount() {
+            guard let textView else { return }
+            guard let saved = Self.savedSelections[document.id] else {
+                textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
+                return
+            }
+            // Defer one turn so the scroll view has its real size (at mount it
+            // still has a placeholder frame); does not take first responder.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, let textView = self.textView,
+                      self.document.pendingSelection == nil else { return }
+                let length = (textView.string as NSString).length
+                let location = min(saved.location, length)
+                let range = NSRange(location: location, length: min(saved.length, length - location))
+                textView.setSelectedRange(range)
+                textView.scrollRangeToVisible(range)
+            }
+        }
+
+        /// One-shot scroll to the leading edge of the document using the
+        /// standard text API, unless a pending selection (go-to-line, search
+        /// result) will position the viewport itself. Called synchronously
+        /// when content first appears — never from async highlight completion.
         func scrollToStartIfNeeded() {
-            guard !hasScrolledToStart, !suppressStartScroll, let textView else { return }
+            guard !hasScrolledToStart, let textView else { return }
             hasScrolledToStart = true
+            guard document.pendingSelection == nil else { return }
             textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
 
@@ -498,6 +604,9 @@ struct CodeEditorView: NSViewRepresentable {
             }
             if let accentObserver {
                 NotificationCenter.default.removeObserver(accentObserver)
+            }
+            if let storageObserver {
+                NotificationCenter.default.removeObserver(storageObserver)
             }
         }
     }

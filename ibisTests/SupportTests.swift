@@ -34,7 +34,10 @@ import AppKit
         #expect(ref.url == URL(filePath: "/some/folder"))
     }
 
-    @Test func codableRoundTrip() throws {
+    // @MainActor: WorkspaceRef's Codable conformance is MainActor-isolated (the
+    // app target's default isolation), so encoding it from a nonisolated test
+    // is an error in Swift 6 language mode.
+    @Test @MainActor func codableRoundTrip() throws {
         let ref = WorkspaceRef(path: "/a/b", isDirectory: false)
         let data = try JSONEncoder().encode(ref)
         let decoded = try JSONDecoder().decode(WorkspaceRef.self, from: data)

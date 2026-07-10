@@ -19,10 +19,9 @@ import Foundation
 
     @Test func pureAdditionCountsAddedOnly() {
         let proposal = LineDiff.proposal(fileURL: fileURL, before: "a", after: "a\nb")
-        let unwrapped = try? #require(proposal)
-        #expect(unwrapped?.added == 1)
-        #expect(unwrapped?.removed == 0)
-        #expect(unwrapped?.afterText == "a\nb")
+        #expect(proposal?.added == 1)
+        #expect(proposal?.removed == 0)
+        #expect(proposal?.afterText == "a\nb")
     }
 
     @Test func pureRemovalCountsRemovedOnly() {

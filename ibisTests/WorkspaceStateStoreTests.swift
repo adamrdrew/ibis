@@ -20,7 +20,7 @@ import Foundation
     }
 
     @Test func savedStateRoundTrips() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/proj-\(UUID().uuidString)")
             let state = sampleState()
             WorkspaceStateStore.save(state, for: root)
@@ -33,7 +33,7 @@ import Foundation
     }
 
     @Test func terminalDockRoundTrips() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/proj-\(UUID().uuidString)")
             let sid = UUID().uuidString
             var state = sampleState()
@@ -70,7 +70,7 @@ import Foundation
     }
 
     @Test func paneWidthFractionsRoundTripAndDefaultToNil() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/proj-\(UUID().uuidString)")
             var state = sampleState()
             state.paneWidthFractions = [0.3, 0.7]
@@ -85,7 +85,7 @@ import Foundation
     }
 
     @Test func legacyStateWithoutTerminalDecodes() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             // A payload written before terminal persistence has no `terminal` key;
             // it must still decode, with `terminal == nil`.
             let root = URL(filePath: "/tmp/proj-\(UUID().uuidString)")
@@ -100,7 +100,7 @@ import Foundation
     }
 
     @Test func trailingSlashKeysCollapse() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             // Finder/`open` open a folder with a trailing slash, the CLI usually
             // without — both must map to one entry so a layout saved under one
             // spelling restores under the other.
@@ -116,7 +116,7 @@ import Foundation
     }
 
     @Test func legacyTrailingSlashEntryLoadsAndMigratesOnSave() async throws {
-        try await TestSupport.withIsolatedDefaults {
+        try TestSupport.withIsolatedDefaults {
             // Entries written before key normalization were keyed exactly as
             // the URL was spelled — with a trailing slash for Finder-opened
             // folders. They must still load, and a save must migrate them so
@@ -135,13 +135,13 @@ import Foundation
     }
 
     @Test func loadForUnknownRootReturnsNil() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             #expect(WorkspaceStateStore.load(for: URL(filePath: "/never/saved-\(UUID().uuidString)")) == nil)
         }
     }
 
     @Test func distinctRootsStoreSeparateState() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             let a = URL(filePath: "/tmp/a-\(UUID().uuidString)")
             let b = URL(filePath: "/tmp/b-\(UUID().uuidString)")
             var stateA = sampleState(); stateA.activePaneIndex = 0
@@ -154,7 +154,7 @@ import Foundation
     }
 
     @Test func evictsOldestRootsBeyondCap() async {
-        await TestSupport.withIsolatedDefaults {
+        TestSupport.withIsolatedDefaults {
             // Save 25 roots (cap is 20); the earliest-dated should be evicted.
             let base = Date(timeIntervalSince1970: 1_000_000)
             var roots: [URL] = []
