@@ -17,6 +17,10 @@ jobs:
     # on a macOS 26+ runner (the test-host app's minimum-OS won't launch on an
     # older OS). Pin the image rather than using `macos-latest`, which can lag.
     runs-on: macos-26
+    # The local suite finishes in ~3 minutes; a healthy CI run (with cold
+    # package resolution and build) fits comfortably in 30. Without this, a
+    # wedged test host eats the 6-hour default (every run July 9–10 did).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -48,13 +52,51 @@ jobs:
             -destination 'platform=macOS' \
             -skipMacroValidation \
             -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee xcodebuild.log &
+          XB=$!
 
-      # Keep the result bundle for inspection when a run fails.
+          # Hang watchdog: a wedged test host produces no output but never
+          # exits (a test task killed by an unwound ObjC exception leaves the
+          # runner waiting forever — see FileOutlineViewTests' spring-test
+          # comment for one local instance). If the log stops growing for 5
+          # minutes, capture thread stacks from every involved process so the
+          # artifact names the hang, then fail fast instead of burning the
+          # 6-hour default.
+          (
+            last=0; stall=0
+            while kill -0 "$XB" 2>/dev/null; do
+              sleep 30
+              size=$(stat -f%z xcodebuild.log 2>/dev/null || echo 0)
+              if [ "$size" = "$last" ]; then stall=$((stall+30)); else stall=0; last=$size; fi
+              if [ "$stall" -ge 300 ]; then
+                echo "HANG: no xcodebuild output for ${stall}s; sampling processes" > hang-diagnosis.txt
+                tail -40 xcodebuild.log >> hang-diagnosis.txt
+                for pid in $(pgrep -f "Ibis.app/Contents/MacOS/Ibis"); do
+                  sample "$pid" 5 -file "hang-sample-host-$pid.txt" || true
+                done
+                sample "$XB" 5 -file hang-sample-xcodebuild.txt || true
+                kill "$XB" 2>/dev/null || true
+                break
+              fi
+            done
+          ) &
+          WATCHDOG=$!
+
+          wait "$XB"; STATUS=$?
+          kill "$WATCHDOG" 2>/dev/null || true
+          # A watchdog kill surfaces as a nonzero xcodebuild exit; the presence
+          # of hang-diagnosis.txt in the artifacts distinguishes hang from fail.
+          exit "$STATUS"
+
+      # Keep the result bundle and any hang stacks for inspection on failure.
       - name: Upload test results
         if: ${{ failure() }}
         uses: actions/upload-artifact@v4
         with:
           name: TestResults
-          path: TestResults.xcresult
+          path: |
+            TestResults.xcresult
+            xcodebuild.log
+            hang-diagnosis.txt
+            hang-sample-*.txt
           if-no-files-found: ignore
