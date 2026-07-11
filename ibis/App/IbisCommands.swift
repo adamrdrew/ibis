@@ -210,7 +210,6 @@ struct IbisCommands: Commands {
             .disabled(workspace == nil)
 
             Button("New Terminal Tab") { workspace?.newTerminalTab() }
-                .keyboardShortcut(KeyEquivalent("`"), modifiers: [.control, .shift])
                 .disabled(workspace == nil)
 
             Button("Close Terminal Tab") { workspace?.closeActiveTerminalTab() }

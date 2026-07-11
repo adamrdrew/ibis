@@ -18,6 +18,7 @@ struct ShortcutsHelpView: View {
     private let sections: [Section] = [
         Section(title: "File", shortcuts: [
             Shortcut(keys: "⌘N", action: "New File"),
+            Shortcut(keys: "⌘T", action: "New Tab (terminal tab when the terminal has focus)"),
             Shortcut(keys: "⇧⌘N", action: "New Window"),
             Shortcut(keys: "⌘O", action: "Open File…"),
             Shortcut(keys: "⇧⌘O", action: "Open Folder…"),
@@ -42,7 +43,6 @@ struct ShortcutsHelpView: View {
         ]),
         Section(title: "Terminal", shortcuts: [
             Shortcut(keys: "⌃`", action: "Show or Hide Terminal"),
-            Shortcut(keys: "⌃⇧`", action: "New Terminal Tab"),
             Shortcut(keys: "⌃⇧A", action: "Open in Agent"),
             Shortcut(keys: "⌃⇧]", action: "Show Next Terminal"),
             Shortcut(keys: "⌃⇧[", action: "Show Previous Terminal")
