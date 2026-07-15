@@ -5,4 +5,3 @@ build/
 xcuserdata/
 *.xcresult
 .ibis.json
-.mcp.json
