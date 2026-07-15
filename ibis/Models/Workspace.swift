@@ -367,6 +367,14 @@ final class Workspace {
         rootURL.lastPathComponent
     }
 
+    /// The desktop-notification title for pings from this project's agent —
+    /// "Claude in ibis" — naming both the agent and the project, so with
+    /// several Ibis windows running agents the notification says which one
+    /// wants the human back.
+    var agentNotificationTitle: String {
+        "\(settings?.agentName ?? "Agent") in \(displayName)"
+    }
+
     /// Recomputes `rootIsEmpty` from the (already-loaded) root children. Call
     /// only from outside the outline view's layout — after an async load or a
     /// filesystem reload — so it never races the outline's in-layout child load.
@@ -400,12 +408,12 @@ final class Workspace {
         }
         let activeIndex = layout.panes.firstIndex { $0.id == layout.activePaneID } ?? 0
         parts.append("active=\(activeIndex)")
-        // Terminal dock: recreate a persist when the set of tabs, their roles /
-        // session ids, the active tab, or dock visibility change. Titles are
-        // deliberately excluded — an agent rewrites its tab title constantly and
-        // would otherwise churn the store on every keystroke of output.
+        // Terminal dock: recreate a persist when the set of tabs, their roles,
+        // the active tab, or dock visibility change. Titles are deliberately
+        // excluded — an agent rewrites its tab title constantly and would
+        // otherwise churn the store on every keystroke of output.
         for session in terminal.persistableSessions {
-            parts.append("t:\(session.role):\(session.agentSessionID ?? String(describing: session.id))")
+            parts.append("t:\(session.role):\(session.id)")
         }
         parts.append("term=\(terminal.activePersistableIndex):\(terminal.isVisible)")
         return parts.joined(separator: ";")
@@ -481,11 +489,7 @@ final class Workspace {
     /// `.run` project-action tab, the active tab's index, and dock visibility.
     private func terminalSnapshot() -> PersistedTerminalDock {
         let sessions = terminal.persistableSessions.map { session in
-            PersistedTerminalSession(
-                role: session.role,
-                title: session.title,
-                agentSessionID: session.agentSessionID
-            )
+            PersistedTerminalSession(role: session.role, title: session.title)
         }
         return PersistedTerminalDock(
             sessions: sessions,
@@ -579,7 +583,7 @@ final class Workspace {
 
     /// Recreates the persisted terminal dock. Every persisted tab comes back —
     /// dropping one would let the next snapshot overwrite the store without it,
-    /// permanently losing its agent session pointer. Agent tabs restore
+    /// silently losing the user's tab. Agent tabs restore
     /// regardless of folder trust: a persisted agent tab exists only because
     /// the user launched one here themselves (the trust gate exists for
     /// Shortcut/Siri launches into folders the user has never seen, which can't
@@ -611,26 +615,30 @@ final class Workspace {
         }
     }
 
-    /// Restores one persisted agent tab. For Claude, the launch resumes the
-    /// stored session if its conversation exists on disk, re-pins the same
-    /// `--session-id` if not (Claude only writes the transcript on the first
-    /// message, so resuming a never-used session would just fail), and mints a
-    /// fresh id for a tab persisted without one, so its new conversation is
-    /// resumable like any other. A non-Claude agent relaunches fresh but keeps
-    /// any stored Claude session pointer on the tab, and a tab with no agent
-    /// configured comes back as a plain shell that keeps its role and pointer —
-    /// in every case the pointer survives until Claude is configured again.
+    /// Restores one persisted agent tab. For Claude, the tab relaunches into
+    /// the project's deterministic session (`MCPService.projectSessionID`) —
+    /// resuming its conversation if a transcript exists on disk, creating it
+    /// with `--session-id` if not (Claude only writes the transcript on the
+    /// first message). The session has a single claimant, so only the first
+    /// Claude tab launches; any further persisted agent tabs (from snapshots
+    /// written before one-project-one-agent) come back as plain shells rather
+    /// than fighting over it. A non-Claude agent relaunches fresh, and a tab
+    /// with no agent configured comes back as an idle agent-role tab whose
+    /// Restart reclaims the project session once an agent is configured.
     private func restoreAgentTab(_ session: PersistedTerminalSession, settings: AppSettings) -> TerminalSession {
         if settings.agentKind == .claude {
-            let sid = session.agentSessionID ?? UUID().uuidString
+            guard agentTab == nil else {
+                return terminal.newSession(title: session.title, takeFocus: false)
+            }
             if let (command, resume) = MCPService.agentRelaunchCommand(
-                settings: settings, sessionID: sid, workingDirectory: projectRoot,
+                settings: settings,
+                sessionID: MCPService.projectSessionID(for: projectRoot),
+                workingDirectory: projectRoot,
                 mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
             ) {
                 MCPService.bindAgent(to: self, settings: settings)
                 let restored = terminal.newSession(
-                    command: command, title: session.title,
-                    role: .agent, agentSessionID: sid, takeFocus: false
+                    command: command, title: session.title, role: .agent, takeFocus: false
                 )
                 if resume { armResumeRecovery(for: restored, settings: settings) }
                 return restored
@@ -638,39 +646,35 @@ final class Workspace {
         } else if let command = MCPService.launchCommand(settings: settings) {
             MCPService.bindAgent(to: self, settings: settings)
             return terminal.newSession(
-                command: command, title: session.title,
-                role: .agent, agentSessionID: session.agentSessionID, takeFocus: false
+                command: command, title: session.title, role: .agent, takeFocus: false
             )
         }
-        // No agent configured: preserve the tab (and its session pointer).
-        return terminal.newSession(
-            title: session.title,
-            role: .agent, agentSessionID: session.agentSessionID, takeFocus: false
-        )
+        // No agent configured: preserve the tab and its role.
+        return terminal.newSession(title: session.title, role: .agent, takeFocus: false)
     }
 
-    /// Recovers a restored Claude tab whose `--resume` failed because the prior
-    /// session no longer exists (`claude` prints "No conversation found" and
-    /// exits 1 within a second): the tab relaunches as a *fresh* session (new
-    /// tracked id) behind a notice, and the new id is persisted so future
-    /// restores resume the new conversation. When the transcript still exists,
-    /// the id is never replaced — a fast failure then means claude rejected the
-    /// resume ("already in use") while the previous window's agent finished
-    /// shutting down, so the same resume is retried (bounded) after a pause.
-    /// The handler disarms itself on the first exit it declines to act on, so a
-    /// deliberate quit of a successfully resumed agent can't trigger a phantom
-    /// relaunch later.
+    /// Recovers a Claude tab whose `--resume` failed because the conversation
+    /// no longer exists (`claude` prints "No conversation found" and exits 1
+    /// within a second — e.g. Claude pruned the transcript): the tab relaunches
+    /// behind a notice, re-pinned to the *same* deterministic project session
+    /// id with `--session-id`, starting its conversation over. When the
+    /// transcript still exists, a fast failure instead means claude rejected
+    /// the resume ("already in use") while another instance finished shutting
+    /// down, so the same resume is retried (bounded) after a pause. The handler
+    /// disarms itself on the first exit it declines to act on, so a deliberate
+    /// quit of a successfully resumed agent can't trigger a phantom relaunch
+    /// later.
     private func armResumeRecovery(for session: TerminalSession, settings: AppSettings) {
         var resumeRetriesRemaining = 2
         session.onProcessExit = { [weak self, weak session] exitCode, ranFor in
             guard let self, let session else { return }
             let disarm = { session.onProcessExit = nil }
             guard ranFor < 15, (exitCode ?? 0) != 0 else { return disarm() }
-            if let sid = session.agentSessionID,
-               MCPService.claudeSessionFileExists(sessionID: sid, workingDirectory: self.projectRoot) {
-                // The conversation is real, so this id must never be replaced.
-                // The "already in use" rejection lands within a couple of
-                // seconds of launch; anything slower is the user quitting a
+            let sid = MCPService.projectSessionID(for: self.projectRoot)
+            if MCPService.claudeSessionFileExists(sessionID: sid, workingDirectory: self.projectRoot) {
+                // The conversation is real, so keep trying to resume it. The
+                // "already in use" rejection lands within a couple of seconds
+                // of launch; anything slower is the user quitting a
                 // *successful* resume (Ctrl-C, declining claude's own trust
                 // prompt) and must be left alone. Past the bounded retries, the
                 // exited overlay's Restart re-runs the same resume manually.
@@ -684,20 +688,15 @@ final class Workspace {
                 return
             }
             disarm()
-            let fresh = UUID().uuidString
             guard let command = MCPService.launchCommand(
-                settings: settings, sessionID: fresh,
+                settings: settings, sessionID: sid,
                 mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
             ) else { return }
             MCPService.bindAgent(to: self, settings: settings)
             session.relaunch(
-                notice: "Previous \(settings.agentName) session not found — starting a new session.",
-                command: command,
-                agentSessionID: fresh
+                notice: "Previous \(settings.agentName) conversation not found — starting it over.",
+                command: command
             )
-            // agentSessionID is not observed, so persist explicitly to record
-            // the new id for the next restore.
-            self.persistLayoutState()
         }
     }
 
@@ -1333,12 +1332,12 @@ final class Workspace {
     }
 
     /// Reveals the terminal dock and launches the configured agent in a fresh
-    /// terminal tab, rooted at the workspace. `sessionID` is the Claude session
-    /// UUID the command was built with (via `--session-id`), stored on the tab so
-    /// window-layout restoration can resume the conversation later.
-    func runAgent(command: String, name: String, sessionID: String? = nil) {
-        terminal.newSession(command: command, title: name, role: .agent, agentSessionID: sessionID)
+    /// terminal tab, rooted at the workspace.
+    @discardableResult
+    func runAgent(command: String, name: String) -> TerminalSession {
+        let session = terminal.newSession(command: command, title: name, role: .agent)
         terminal.isVisible = true
+        return session
     }
 
     /// The agent terminal to receive a "Send to Agent" payload: the active tab if
@@ -1395,20 +1394,52 @@ final class Workspace {
         return "\"\(relative.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
-    /// Launches the configured agent in a new terminal tab: binds MCP and, for
-    /// Claude, pins a fresh session UUID so a later window restore can resume
-    /// the conversation. The single entry point for a user-initiated launch, so
-    /// every route (toolbar, menu bar, intents) behaves identically — a route
-    /// that skipped the UUID would create a conversation restore can never
-    /// bring back.
+    /// The window's agent tab, whatever state its process is in. One project
+    /// has one agent tab (and, for Claude, one deterministic session), so every
+    /// launch route targets this before creating anything.
+    var agentTab: TerminalSession? {
+        terminal.sessions.first { $0.role == .agent }
+    }
+
+    /// Opens the project's agent: the single entry point for every
+    /// user-initiated launch (toolbar, menu bar, intents, CLI), and idempotent —
+    /// "Open Claude" always lands on THE agent for this project. If the agent
+    /// tab already exists it is focused (restarted first if its process exited);
+    /// otherwise one is created. For Claude the tab launches into the project's
+    /// deterministic session (`MCPService.projectSessionID`), resuming its
+    /// conversation when a transcript exists and creating it when not — fully
+    /// derived from the project path, nothing persisted.
     func launchConfiguredAgent(settings: AppSettings) {
-        let sessionID = settings.agentKind == .claude ? UUID().uuidString : nil
+        if let tab = agentTab {
+            terminal.isVisible = true
+            terminal.activeSessionID = tab.id
+            tab.wantsFocus = true
+            if tab.hasStarted, !tab.isRunning {
+                let override = settings.terminalShellPath.isEmpty ? nil : settings.terminalShellPath
+                restartTerminalSession(tab, settings: settings, shellOverride: override)
+            }
+            return
+        }
+
+        if settings.agentKind == .claude {
+            guard let (command, resume) = MCPService.agentRelaunchCommand(
+                settings: settings,
+                sessionID: MCPService.projectSessionID(for: projectRoot),
+                workingDirectory: projectRoot,
+                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+            ) else { return }
+            MCPService.bindAgent(to: self, settings: settings)
+            let launched = runAgent(command: command, name: settings.agentName)
+            if resume { armResumeRecovery(for: launched, settings: settings) }
+            return
+        }
+
         guard let command = MCPService.launchCommand(
-            settings: settings, sessionID: sessionID,
+            settings: settings,
             mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
         ) else { return }
         MCPService.bindAgent(to: self, settings: settings)
-        runAgent(command: command, name: settings.agentName, sessionID: sessionID)
+        runAgent(command: command, name: settings.agentName)
     }
 
     /// Restarts an exited terminal tab in its own view. A Claude agent tab
@@ -1419,9 +1450,11 @@ final class Workspace {
     func restartTerminalSession(_ session: TerminalSession, settings: AppSettings, shellOverride: String?) {
         if session.role == .agent {
             MCPService.bindAgent(to: self, settings: settings)
-            if settings.agentKind == .claude, let sid = session.agentSessionID,
+            if settings.agentKind == .claude,
                let (command, _) = MCPService.agentRelaunchCommand(
-                   settings: settings, sessionID: sid, workingDirectory: projectRoot,
+                   settings: settings,
+                   sessionID: MCPService.projectSessionID(for: projectRoot),
+                   workingDirectory: projectRoot,
                    mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
                ) {
                 session.restart(shellOverride: shellOverride, command: command)
@@ -1437,11 +1470,19 @@ final class Workspace {
     /// "suppress from focused window", refined to the tab). The program decided
     /// it was worth interrupting for, so this honors it for any session, using
     /// the program's own message. A tap raises this window.
+    ///
+    /// The title is always "<sender> in <project>", not the program's own title:
+    /// agents send a static one ("Claude Code") that reads identically from
+    /// every window, and the whole point of the ping is knowing *which* project
+    /// wants the human back.
     private func handleTerminalNotification(_ session: TerminalSession, title: String?, body: String) {
         guard !isSessionOnScreen(session) else { return }
+        let notificationTitle = session.role == .agent
+            ? agentNotificationTitle
+            : "\(title ?? session.title) in \(displayName)"
         DesktopNotifier.shared.post(
-            title: title ?? "Ibis — \(displayName)",
-            body: body,
+            title: notificationTitle,
+            body: body.isEmpty ? "Needs your attention" : body,
             token: MCPBridge.shared.token(for: self)
         )
     }
@@ -1452,9 +1493,10 @@ final class Workspace {
     /// ones that ride along with an explicit OSC notification.
     private func handleTerminalBell(_ session: TerminalSession) {
         guard !isSessionOnScreen(session) else { return }
+        let agent = session.role == .agent
         DesktopNotifier.shared.post(
-            title: "Ibis — \(displayName)",
-            body: "\(session.title) rang the terminal bell",
+            title: agent ? agentNotificationTitle : "Terminal in \(displayName)",
+            body: agent ? "Needs your attention" : "\(session.title) rang the terminal bell",
             token: MCPBridge.shared.token(for: self)
         )
     }

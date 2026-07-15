@@ -285,13 +285,15 @@ import AppKit
         #expect(reportedRanFor < 15)      // and it failed quickly
     }
 
-    @Test func relaunchRetargetsToAFreshSession() async throws {
+    @Test func relaunchCanReplaceTheCommand() async throws {
+        // A Claude tab whose conversation is gone for good relaunches re-pinned
+        // with `--session-id` instead of the failed `--resume` — so relaunch
+        // must accept a replacement command.
         let session = TerminalSession(
             workingDirectory: URL.temporaryDirectory,
             command: "exit 1",
             title: "Claude",
-            role: .agent,
-            agentSessionID: "OLD"
+            role: .agent
         )
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
@@ -300,8 +302,7 @@ import AppKit
         )
         _ = await TestSupport.waitUntil(timeout: 15) { session.hasStarted && !session.isRunning }
 
-        session.relaunch(notice: "starting a new session", command: "sleep 30", agentSessionID: "NEW")
-        #expect(session.agentSessionID == "NEW")
+        session.relaunch(notice: "starting the conversation over", command: "sleep 30")
         #expect(session.command == "sleep 30")
         let running = await TestSupport.waitUntil(timeout: 15) { session.isRunning }
         #expect(running, "relaunch should start the fresh command in the same view")
@@ -316,8 +317,7 @@ import AppKit
             workingDirectory: URL.temporaryDirectory,
             command: "exit 1",
             title: "Claude",
-            role: .agent,
-            agentSessionID: "SID"
+            role: .agent
         )
         _ = session.makeTerminalView(
             font: .monospacedSystemFont(ofSize: 12, weight: .regular),
@@ -340,8 +340,7 @@ import AppKit
             workingDirectory: URL.temporaryDirectory,
             command: "exit 7",
             title: "Claude",
-            role: .agent,
-            agentSessionID: "SID"
+            role: .agent
         )
         var exits = 0
         session.onProcessExit = { _, _ in exits += 1 }
@@ -353,8 +352,7 @@ import AppKit
         _ = await TestSupport.waitUntil(timeout: 15) { exits == 1 }
 
         session.relaunch(notice: "retrying")
-        #expect(session.command == "exit 7")     // unchanged — same resume command
-        #expect(session.agentSessionID == "SID") // pointer untouched on a plain retry
+        #expect(session.command == "exit 7") // unchanged — same resume command
         let reran = await TestSupport.waitUntil(timeout: 15) { exits == 2 }
         #expect(reran, "relaunch should run the command again in the same view")
     }

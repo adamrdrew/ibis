@@ -116,6 +116,17 @@ final class AppSettings {
     var mcpPort: Int { didSet { defaults.set(mcpPort, forKey: Key.mcpPort) } }
     /// Shared bearer token required by the server and written into agent configs.
     var mcpToken: String { didSet { defaults.set(mcpToken, forKey: Key.mcpToken) } }
+    /// Whether the server exposes the review tool (`propose_edit` /
+    /// `propose_patch`) to agents, and the injected system prompt tells them to
+    /// route code changes through it. Off by default: without it agents edit
+    /// files directly with their own tools. Mirrored into `MCPToolGate` so the
+    /// (nonisolated) server can read it per request.
+    var mcpReviewToolEnabled: Bool {
+        didSet {
+            defaults.set(mcpReviewToolEnabled, forKey: Key.mcpReviewToolEnabled)
+            MCPToolGate.reviewToolExposed = mcpReviewToolEnabled
+        }
+    }
 
     /// The shell-ready command line for the configured agent, or nil if unset.
     var agentCommandLine: String? {
@@ -171,6 +182,10 @@ final class AppSettings {
             mcpToken = generated
             defaults.set(generated, forKey: Key.mcpToken)
         }
+        // `didSet` doesn't fire during init; `MCPService.apply` seeds the
+        // server-side gate instead (deliberately not here, so the many
+        // throwaway `AppSettings()` in tests can't stomp the shared gate).
+        mcpReviewToolEnabled = defaults.bool(forKey: Key.mcpReviewToolEnabled)
     }
 
     /// A URL-safe random token used as the MCP bearer credential.
@@ -208,5 +223,6 @@ final class AppSettings {
         static let mcpEnabled = "mcp.enabled"
         static let mcpPort = "mcp.port"
         static let mcpToken = "mcp.token"
+        static let mcpReviewToolEnabled = "mcp.reviewToolEnabled"
     }
 }

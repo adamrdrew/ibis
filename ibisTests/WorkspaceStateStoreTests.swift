@@ -35,12 +35,11 @@ import Foundation
     @Test func terminalDockRoundTrips() async {
         TestSupport.withIsolatedDefaults {
             let root = URL(filePath: "/tmp/proj-\(UUID().uuidString)")
-            let sid = UUID().uuidString
             var state = sampleState()
             state.terminal = PersistedTerminalDock(
                 sessions: [
-                    PersistedTerminalSession(role: .shell, title: "zsh", agentSessionID: nil),
-                    PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid)
+                    PersistedTerminalSession(role: .shell, title: "zsh"),
+                    PersistedTerminalSession(role: .agent, title: "Claude")
                 ],
                 activeSessionIndex: 1,
                 isVisible: true
@@ -51,7 +50,6 @@ import Foundation
             #expect(loaded?.sessions.count == 2)
             #expect(loaded?.sessions[0].role == .shell)
             #expect(loaded?.sessions[1].role == .agent)
-            #expect(loaded?.sessions[1].agentSessionID == sid)
             #expect(loaded?.activeSessionIndex == 1)
             #expect(loaded?.isVisible == true)
         }
@@ -60,13 +58,18 @@ import Foundation
     @Test func roleEncodesAsPlainStrings() async throws {
         // The wire format predates the typed role ("shell"/"agent" strings);
         // payloads written by either version must decode in the other.
-        let session = PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: nil)
+        let session = PersistedTerminalSession(role: .agent, title: "Claude")
         let json = String(decoding: try JSONEncoder().encode(session), as: UTF8.self)
         #expect(json.contains("\"agent\""))
 
         let legacy = Data(#"{"role": "shell", "title": "zsh"}"#.utf8)
         let decoded = try JSONDecoder().decode(PersistedTerminalSession.self, from: legacy)
         #expect(decoded.role == .shell)
+
+        // Payloads written when the tab carried a session id must still decode
+        // (the key is simply ignored now that ids are deterministic).
+        let withID = Data(#"{"role": "agent", "title": "Claude", "agentSessionID": "ABC"}"#.utf8)
+        #expect(try JSONDecoder().decode(PersistedTerminalSession.self, from: withID).role == .agent)
     }
 
     @Test func paneWidthFractionsRoundTripAndDefaultToNil() async {

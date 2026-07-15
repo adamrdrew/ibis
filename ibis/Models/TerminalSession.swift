@@ -18,13 +18,6 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     let workingDirectory: URL
     let role: Role
 
-    /// For a Claude agent tab, the stable session UUID this tab was launched with
-    /// (`claude --session-id <uuid>`), so window-layout restoration can bring the
-    /// conversation back via `claude --resume <uuid>`. Nil for shells and agents
-    /// that don't support session resume. Excluded from observation — it's plumbing
-    /// for persistence, not UI state.
-    @ObservationIgnored var agentSessionID: String?
-
     /// A specific command to run as a login shell (e.g. an agent or a project
     /// action), or nil for a plain interactive shell. Mutable so the reusable
     /// `run` session can execute successive actions.
@@ -136,13 +129,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         command: String? = nil,
         title: String? = nil,
         role: Role = .shell,
-        agentSessionID: String? = nil,
         extraEnvironment: [String: String] = [:]
     ) {
         self.workingDirectory = workingDirectory
         self.command = command
         self.role = role
-        self.agentSessionID = agentSessionID
         self.extraEnvironment = extraEnvironment
         let resolvedTitle = title ?? workingDirectory.lastPathComponent
         self.defaultTitle = resolvedTitle
@@ -176,6 +167,8 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
         // Make the mouse wheel scroll full-screen TUIs (Claude Code, less, vim…).
         TerminalScrollFix.installIfNeeded()
+        // Make ⌘⏎ insert a newline in agent TUIs instead of submitting.
+        TerminalReturnKeyFix.installIfNeeded()
 
         let view = IbisTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
         view.processDelegate = self
@@ -434,12 +427,11 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
     /// Writes a yellow notice into the terminal and re-runs the tab in the same
     /// view. With no arguments the current command is retried verbatim (a
     /// `--resume` rejected while the previous window's agent finished shutting
-    /// down); pass `command`/`agentSessionID` to relaunch as a fresh session
-    /// after a resume whose conversation is gone for good.
-    func relaunch(notice: String, command: String? = nil, agentSessionID: String? = nil) {
+    /// down); pass `command` to relaunch differently, e.g. re-pinned with
+    /// `--session-id` after a resume whose conversation is gone for good.
+    func relaunch(notice: String, command: String? = nil) {
         guard let terminalView, !isRunning else { return }
         if let command { self.command = command }
-        if let agentSessionID { self.agentSessionID = agentSessionID }
         // Notice line first, then the relaunched command's output follows below.
         terminalView.feed(text: "\r\n\u{1b}[33m" + notice + "\u{1b}[0m\r\n")
         startShell(shellOverride: lastShellOverride, on: terminalView)

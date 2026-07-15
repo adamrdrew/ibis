@@ -329,7 +329,7 @@ final class MCPBridge {
         // they aren't, ping the desktop so they know to come back to it.
         if !isForeground(workspace) {
             DesktopNotifier.shared.post(
-                title: "Ibis — \(workspace.displayName)", body: message, token: token
+                title: workspace.agentNotificationTitle, body: message, token: token
             )
         }
     }
@@ -346,8 +346,8 @@ final class MCPBridge {
         // back — tapping it raises this window and reveals the sheet.
         if !isForeground(workspace) {
             DesktopNotifier.shared.post(
-                title: "Ibis — \(workspace.displayName)",
-                body: "The agent is asking: \(question)", token: token
+                title: workspace.agentNotificationTitle,
+                body: "Asking: \(question)", token: token
             )
         }
         let key = token ?? ""

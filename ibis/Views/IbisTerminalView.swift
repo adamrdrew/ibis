@@ -118,12 +118,19 @@ final class IbisTerminalView: LocalProcessTerminalView, SendToAgentResponding {
     }
 }
 
-/// Routes a plain Return pressed in an *exited* terminal to its restart
-/// affordance (`IbisTerminalView.returnKeyAction`). A subclass can't intercept
-/// this in `keyDown` — SwiftTerm declares it `public`, not `open` — so a local
-/// monitor checks whether the key window's first responder sits inside an
-/// `IbisTerminalView` that wants the key. Focus-scoped by construction: Return
-/// anywhere else (editor, file tree, a live terminal) is untouched.
+/// Fixes what the Return key does inside an `IbisTerminalView`. A subclass
+/// can't intercept it in `keyDown` — SwiftTerm declares it `public`, not `open`
+/// — so a local monitor checks whether the key window's first responder sits
+/// inside an `IbisTerminalView` that wants the key. Focus-scoped by
+/// construction: Return anywhere else (editor, file tree) is untouched.
+///
+/// Two fixes share the monitor:
+/// 1. **⌘⏎ inserts a newline in agent TUIs.** SwiftTerm ignores the Command
+///    modifier and transmits a bare CR, so Claude Code submits the prompt
+///    instead of adding a line. We transmit ESC CR (the Option+Return
+///    sequence), which agent TUIs interpret as "insert newline".
+/// 2. **Plain ⏎ in an *exited* terminal** triggers its restart affordance
+///    (`IbisTerminalView.returnKeyAction`) instead of reaching the dead PTY.
 @MainActor
 enum TerminalReturnKeyFix {
     private static let returnKeyCode: UInt16 = 36
@@ -143,10 +150,14 @@ enum TerminalReturnKeyFix {
     /// Handles a key press. Returns whether it was consumed.
     private static func handle(_ event: NSEvent) -> Bool {
         guard event.keyCode == returnKeyCode,
-              event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
               let responder = event.window?.firstResponder as? NSView,
-              let terminalView = enclosingIbisTerminalView(responder),
-              let action = terminalView.returnKeyAction else { return false }
+              let terminalView = enclosingIbisTerminalView(responder) else { return false }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        if modifiers == .command {
+            terminalView.send([0x1b, 0x0d]) // ESC CR — "insert newline" to agent TUIs
+            return true
+        }
+        guard modifiers.isEmpty, let action = terminalView.returnKeyAction else { return false }
         return action()
     }
 
