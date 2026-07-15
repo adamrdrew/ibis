@@ -67,6 +67,10 @@ struct IbisCommands: Commands {
             Button("Open Folder…") { open(choosingDirectories: true) }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
 
+            Button("Open \(settings.agentName)") { runAgent() }
+                .keyboardShortcut("a", modifiers: [.control, .shift])
+                .disabled(workspace == nil || settings.agentCommandLine == nil)
+
             openRecentMenu
         }
 
@@ -214,12 +218,6 @@ struct IbisCommands: Commands {
 
             Button("Close Terminal Tab") { workspace?.closeActiveTerminalTab() }
                 .disabled(workspace?.terminal.activeSessionID == nil)
-
-            Divider()
-
-            Button("Open in \(settings.agentName)") { runAgent() }
-                .keyboardShortcut("a", modifiers: [.control, .shift])
-                .disabled(workspace == nil || settings.agentCommandLine == nil)
 
             Divider()
 

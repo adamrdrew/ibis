@@ -229,7 +229,7 @@ struct WorkspaceView: View {
                 .help("Show or Hide Terminal (⌃`)")
 
                 Button(action: openAgent) {
-                    Label("Open in \(settings.agentName)", systemImage: "sparkles")
+                    Label("Open \(settings.agentName)", systemImage: "sparkles")
                 }
                 .disabled(workspace == nil || settings.agentCommandLine == nil)
                 .help("Run \(settings.agentName) in a terminal (⌃⇧A)")

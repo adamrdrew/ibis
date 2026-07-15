@@ -216,7 +216,7 @@ private struct AgentSettingsView: View {
                     .font(.system(.body, design: .monospaced))
                 TextField("Arguments", text: $settings.agentArgs, prompt: Text("optional, e.g. --model opus"))
                     .font(.system(.body, design: .monospaced))
-                Text("Runs in a new terminal at the workspace folder via “Open in \(settings.agentName)” (⌃⇧A) or the toolbar. Launched through a login shell so your PATH applies.")
+                Text("Runs in a new terminal at the workspace folder via “Open \(settings.agentName)” in the File menu (⌃⇧A) or the toolbar. Launched through a login shell so your PATH applies.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

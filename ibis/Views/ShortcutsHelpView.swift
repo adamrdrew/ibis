@@ -22,6 +22,7 @@ struct ShortcutsHelpView: View {
             Shortcut(keys: "⇧⌘N", action: "New Window"),
             Shortcut(keys: "⌘O", action: "Open File…"),
             Shortcut(keys: "⇧⌘O", action: "Open Folder…"),
+            Shortcut(keys: "⌃⇧A", action: "Open Agent"),
             Shortcut(keys: "⌘S", action: "Save"),
             Shortcut(keys: "⇧⌘S", action: "Save As…")
         ]),
@@ -43,7 +44,6 @@ struct ShortcutsHelpView: View {
         ]),
         Section(title: "Terminal", shortcuts: [
             Shortcut(keys: "⌃`", action: "Show or Hide Terminal"),
-            Shortcut(keys: "⌃⇧A", action: "Open in Agent"),
             Shortcut(keys: "⌃⇧]", action: "Show Next Terminal"),
             Shortcut(keys: "⌃⇧[", action: "Show Previous Terminal")
         ])

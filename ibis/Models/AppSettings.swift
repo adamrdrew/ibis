@@ -96,7 +96,7 @@ final class AppSettings {
     // MARK: Agent
 
     /// A configurable command-line agent (e.g. `claude`, `codex`) launched in a
-    /// terminal by the "Open in Agent" action.
+    /// terminal by the File menu's "Open <agent>" action.
     var agentName: String { didSet { defaults.set(agentName, forKey: Key.agentName) } }
     var agentCommand: String { didSet { defaults.set(agentCommand, forKey: Key.agentCommand) } }
     var agentArgs: String { didSet { defaults.set(agentArgs, forKey: Key.agentArgs) } }
