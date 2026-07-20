@@ -259,7 +259,13 @@ private struct AgentSettingsView: View {
 
                     Toggle("Inject Ibis system prompt (Claude Code)", isOn: $settings.agentInjectSystemPrompt)
 
+                    Toggle("Expose review tool", isOn: $settings.mcpReviewToolEnabled)
+
                     Text("Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only. The system prompt tells Claude Code it is running in Ibis and how to use its tools; it is appended at launch via --append-system-prompt.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    Text("The review tool (propose_edit / propose_patch) lets the agent propose file changes that you approve as a diff before they are written; the system prompt then directs it to route code changes through that review. When off, the tools aren’t offered and agents edit files directly. Applies to newly launched agent sessions.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {

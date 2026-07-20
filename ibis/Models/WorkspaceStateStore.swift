@@ -1,15 +1,16 @@
 import Foundation
 
 /// One persisted terminal tab: enough to recreate it on relaunch. The `.run`
-/// project-action tab is never persisted.
+/// project-action tab is never persisted. (Claude session ids are deliberately
+/// *not* persisted: the id is deterministic — `MCPService.projectSessionID` —
+/// so restore re-derives it from the project path. Old payloads carrying an
+/// `agentSessionID` key still decode; the key is ignored.)
 struct PersistedTerminalSession: Codable {
     /// `.shell` for an interactive shell, `.agent` for a launched coding agent
     /// (encoded as the raw strings "shell"/"agent").
     var role: TerminalSession.Role
     /// The tab title at snapshot time (a fresh shell/agent may overwrite it).
     var title: String
-    /// For a Claude agent, the session UUID to resume (`claude --resume <uuid>`).
-    var agentSessionID: String?
 }
 
 /// A snapshot of the integrated terminal dock, persisted per workspace root.

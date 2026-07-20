@@ -107,7 +107,6 @@ final class TerminalDock {
         command: String? = nil,
         title: String? = nil,
         role: TerminalSession.Role = .shell,
-        agentSessionID: String? = nil,
         takeFocus: Bool = true
     ) -> TerminalSession {
         let session = TerminalSession(
@@ -115,7 +114,6 @@ final class TerminalDock {
             command: command,
             title: title,
             role: role,
-            agentSessionID: agentSessionID,
             extraEnvironment: launchEnvironment
         )
         // Give the freshly opened terminal/agent tab keyboard focus once built.

@@ -576,11 +576,10 @@ import Foundation
             try await TestSupport.withTempDir { dir in
                 let settings = AppSettings()
                 settings.agentCommand = "" // no agent configured
-                let sid = UUID().uuidString
                 WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
                     sessions: [
-                        PersistedTerminalSession(role: .shell, title: "zsh", agentSessionID: nil),
-                        PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid),
+                        PersistedTerminalSession(role: .shell, title: "zsh"),
+                        PersistedTerminalSession(role: .agent, title: "Claude"),
                     ],
                     activeSessionIndex: 1,
                     isVisible: true
@@ -590,10 +589,9 @@ import Foundation
                 await workspace.restoreSession(settings: settings)
 
                 let sessions = workspace.terminal.sessions
+                // No agent configured: the tab is preserved with its role, so
+                // its Restart reclaims the project session once one is.
                 #expect(sessions.map(\.role) == [.shell, .agent])
-                // No agent configured: the tab is preserved with its pointer
-                // intact, so it survives until an agent is configured again.
-                #expect(sessions.last?.agentSessionID == sid)
                 #expect(workspace.terminal.activeSessionID == sessions.last?.id)
                 #expect(workspace.terminal.isVisible)
                 #expect(workspace.restorationComplete)
@@ -606,10 +604,9 @@ import Foundation
             try await TestSupport.withTempDir { dir in
                 let settings = AppSettings()
                 settings.agentCommand = ""
-                let sid = UUID().uuidString
                 WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
                     sessions: [
-                        PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid),
+                        PersistedTerminalSession(role: .agent, title: "Claude"),
                     ],
                     activeSessionIndex: 0,
                     isVisible: true
@@ -619,28 +616,27 @@ import Foundation
                 // The user opens a terminal while the (slow) editor restore is
                 // still awaiting: the persisted tabs must restore alongside it,
                 // not be silently dropped (the next snapshot would then
-                // permanently lose the agent session pointer).
+                // permanently lose the tab).
                 let userTab = workspace.terminal.newSession()
                 await workspace.restoreSession(settings: settings)
 
                 #expect(workspace.terminal.sessions.count == 2)
-                #expect(workspace.terminal.sessions.contains { $0.agentSessionID == sid })
+                #expect(workspace.terminal.sessions.contains { $0.role == .agent })
                 // The user's tab keeps focus.
                 #expect(workspace.terminal.activeSessionID == userTab.id)
             }
         }
     }
 
-    @Test func restoreSessionPreservesPointerWhenAgentSwitchedAway() async throws {
+    @Test func restoreSessionRelaunchesNonClaudeAgentFresh() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let settings = AppSettings()
                 settings.agentCommand = "codex"
                 settings.agentArgs = ""
                 settings.agentKind = .codex
-                let sid = UUID().uuidString
                 WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
-                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: sid)],
+                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude")],
                     activeSessionIndex: 0,
                     isVisible: true
                 )), for: dir)
@@ -648,17 +644,15 @@ import Foundation
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 await workspace.restoreSession(settings: settings)
 
-                // The tab relaunches as the newly configured agent, but the
-                // Claude session pointer must ride along: switching back to
-                // Claude later can still resume the old conversation.
+                // The tab relaunches as the currently configured agent.
                 let restored = try #require(workspace.terminal.sessions.first)
                 #expect(restored.command == "codex")
-                #expect(restored.agentSessionID == sid)
+                #expect(restored.role == .agent)
             }
         }
     }
 
-    @Test func restoreSessionMintsSessionIDForUntrackedClaudeTab() async throws {
+    @Test func restoreSessionLaunchesTheDeterministicProjectSession() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let settings = AppSettings()
@@ -667,7 +661,7 @@ import Foundation
                 settings.agentKind = .claude
                 settings.agentInjectSystemPrompt = false
                 WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
-                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude", agentSessionID: nil)],
+                    sessions: [PersistedTerminalSession(role: .agent, title: "Claude")],
                     activeSessionIndex: 0,
                     isVisible: true
                 )), for: dir)
@@ -675,18 +669,47 @@ import Foundation
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 await workspace.restoreSession(settings: settings)
 
-                // A tab persisted before session tracking has no id; restoring
-                // it must mint one (like every fresh launch) so the *new*
-                // conversation is resumable, rather than launching untracked.
+                // The restored tab targets the project's deterministic session
+                // — derived from the path, not from anything persisted. No
+                // transcript exists for this temp dir, so the launch pins
+                // `--session-id` (creating the conversation) rather than
+                // resuming.
                 let restored = try #require(workspace.terminal.sessions.first)
-                let minted = try #require(restored.agentSessionID)
-                #expect(UUID(uuidString: minted) != nil)
-                #expect(restored.command == "claude --session-id " + minted)
+                let sid = MCPService.projectSessionID(for: dir)
+                #expect(restored.command == "claude --session-id " + sid)
             }
         }
     }
 
-    @Test func launchConfiguredAgentPinsClaudeSession() async throws {
+    @Test func restoreSessionRestoresOnlyOneClaudeAgentTab() async throws {
+        try await TestSupport.withIsolatedDefaults {
+            try await TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "claude"
+                settings.agentArgs = ""
+                settings.agentKind = .claude
+                settings.agentInjectSystemPrompt = false
+                // A snapshot from before one-project-one-agent could carry two
+                // agent tabs; only one may claim the (single) project session.
+                WorkspaceStateStore.save(stateWithTerminal(PersistedTerminalDock(
+                    sessions: [
+                        PersistedTerminalSession(role: .agent, title: "Claude"),
+                        PersistedTerminalSession(role: .agent, title: "Claude 2"),
+                    ],
+                    activeSessionIndex: 0,
+                    isVisible: true
+                )), for: dir)
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                await workspace.restoreSession(settings: settings)
+
+                #expect(workspace.terminal.sessions.count == 2)
+                #expect(workspace.terminal.sessions.map(\.role) == [.agent, .shell])
+            }
+        }
+    }
+
+    @Test func launchConfiguredAgentPinsTheProjectSession() async throws {
         try TestSupport.withIsolatedDefaults {
             try TestSupport.withTempDir { dir in
                 let settings = AppSettings()
@@ -696,16 +719,40 @@ import Foundation
                 settings.agentInjectSystemPrompt = false
 
                 // Every launch route goes through this one entry point, so a
-                // menu-bar launch is just as restorable as the toolbar's.
+                // menu-bar launch behaves exactly like the toolbar's.
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 workspace.launchConfiguredAgent(settings: settings)
 
                 let tab = try #require(workspace.terminal.sessions.first)
                 #expect(tab.role == .agent)
-                let sid = try #require(tab.agentSessionID)
-                #expect(UUID(uuidString: sid) != nil)
+                let sid = MCPService.projectSessionID(for: dir)
                 #expect(tab.command == "claude --session-id " + sid)
                 #expect(workspace.terminal.isVisible)
+            }
+        }
+    }
+
+    @Test func launchConfiguredAgentIsIdempotent() async throws {
+        try TestSupport.withIsolatedDefaults {
+            try TestSupport.withTempDir { dir in
+                let settings = AppSettings()
+                settings.agentCommand = "claude"
+                settings.agentArgs = ""
+                settings.agentKind = .claude
+                settings.agentInjectSystemPrompt = false
+
+                let workspace = Workspace(rootURL: dir, isDirectory: true)
+                workspace.launchConfiguredAgent(settings: settings)
+                let tab = try #require(workspace.terminal.sessions.first)
+                // A second "Open Claude" targets THE agent tab (focusing it)
+                // instead of launching a competitor for the project session —
+                // even after the user switched to another terminal tab.
+                let other = workspace.terminal.newSession()
+                #expect(workspace.terminal.activeSessionID == other.id)
+                workspace.launchConfiguredAgent(settings: settings)
+
+                #expect(workspace.terminal.sessions.filter { $0.role == .agent }.count == 1)
+                #expect(workspace.terminal.activeSessionID == tab.id)
             }
         }
     }

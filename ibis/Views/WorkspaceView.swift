@@ -636,8 +636,11 @@ struct WorkspaceView: View {
                         .allowsHitTesting(isVisible)
                 }
             }
-            .navigationTitle(activeDocument?.name ?? workspace.displayName)
-            .navigationSubtitle(workspace.displayName)
+            // Project first, file second: the window title is what Exposé and
+            // the Window menu show, and with several Ibis windows open the
+            // project name is what tells them apart.
+            .navigationTitle(workspace.displayName)
+            .navigationSubtitle(activeDocument?.name ?? "")
             // Title-bar proxy icon (⌘-click path menu, draggable to Finder).
             .navigationDocument(activeDocument?.url ?? workspace.rootURL)
         } else {

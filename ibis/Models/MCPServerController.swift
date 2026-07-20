@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 #if canImport(SwiftMCP)
@@ -15,8 +16,11 @@ import SwiftMCP
 /// Xcode 26's compiler a macro-emitted `extension IbisMCPServer: …` picks up
 /// MainActor default isolation despite the class being nonisolated, which is
 /// rejected. Declared on the class, they stay nonisolated on every compiler.
+// Not `final`: `GatedIbisMCPServer` below overrides the macro-generated tool
+// listing/dispatch members, which is the only seam SwiftMCP leaves for hiding
+// a declared tool at runtime.
 @MCPServer(name: "ibis", version: "1.0")
-nonisolated final class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding {
+nonisolated class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding {
     /// The bearer token of the current connection, which identifies the project
     /// window this agent is bound to. Every tool routes by this.
     private func projectToken() async -> String? {
@@ -112,6 +116,32 @@ nonisolated final class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceP
     }
 }
 
+/// `IbisMCPServer` with the review tool (`propose_edit` / `propose_patch`)
+/// hidden while the setting is off: dropped from tools/list, and rejected as
+/// unknown if called anyway. The gate is read per request, so flipping the
+/// setting needs no server restart — connected agents that cached their tool
+/// list simply pick it up on their next session. `@MCPServer` emits its
+/// listing/dispatch members as plain overridable class members, which makes a
+/// subclass the one seam for gating a declared tool at runtime.
+nonisolated final class GatedIbisMCPServer: IbisMCPServer {
+    private static let reviewToolNames: Set<String> = ["propose_edit", "propose_patch"]
+
+    override var mcpToolMetadata: [MCPToolMetadata] {
+        var metadata = super.mcpToolMetadata
+        if !MCPToolGate.reviewToolExposed {
+            metadata.removeAll { Self.reviewToolNames.contains($0.name) }
+        }
+        return metadata
+    }
+
+    override func callTool(_ name: String, arguments: JSONDictionary) async throws -> Encodable & Sendable {
+        if Self.reviewToolNames.contains(name), !MCPToolGate.reviewToolExposed {
+            throw MCPToolError.unknownTool(name: name)
+        }
+        return try await super.callTool(name, arguments: arguments)
+    }
+}
+
 /// Owns the running MCP server + HTTP transport, bound to 127.0.0.1.
 @MainActor
 @Observable
@@ -133,7 +163,7 @@ final class MCPServerController {
     func start(preferredPort: Int) {
         guard !isRunning, transport == nil else { return }
         startError = nil
-        let server = IbisMCPServer()
+        let server = GatedIbisMCPServer()
         let transport = HTTPSSETransport(server: server, host: "127.0.0.1", port: preferredPort)
         // Accept any token that belongs to a currently-open project window. The
         // token then routes each request to that project (see IbisMCPServer).
@@ -202,6 +232,10 @@ enum MCPService {
 
     /// Starts or stops the server to match the current settings. Idempotent.
     static func apply(settings: AppSettings) {
+        // Seed the tool gate before the server can answer a tools/list;
+        // AppSettings.init deliberately doesn't (see its comment). Ongoing
+        // changes flow through the setting's didSet.
+        MCPToolGate.reviewToolExposed = settings.mcpReviewToolEnabled
         #if canImport(SwiftMCP)
         if settings.mcpEnabled {
             MCPServerController.shared.start(preferredPort: settings.mcpPort)
@@ -243,33 +277,85 @@ enum MCPService {
     /// Orientation injected into the agent's context at launch, so it knows it
     /// is running in Ibis and how to use the Ibis tools. No apostrophes/quotes so
     /// it embeds safely in a single-quoted shell argument.
-    static let agentOrientation = """
+    ///
+    /// The review tool is mentioned only when the setting exposes it, so the
+    /// prompt never advertises tools the server will not list; when it is
+    /// exposed, the prompt also directs the agent to route code changes
+    /// through it instead of its own file-editing tools.
+    static func agentOrientation(reviewToolEnabled: Bool) -> String {
+        let reviewBullet = reviewToolEnabled ? """
+
+    - propose_edit and propose_patch: make code changes that the human reviews as a diff and approves before they are applied and saved.
+    """ : ""
+        let reviewDirective = reviewToolEnabled ? """
+
+
+    Make code changes through propose_edit or propose_patch instead of editing files directly with your own tools, so the human can review each change as a diff and approve it before it lands. Prefer propose_patch for small or surgical changes.
+    """ : ""
+        return """
     You are running inside Ibis, a collaborative workspace where a human and an agent work together in a single project window. The human directs and reviews the work and may not read code directly, so prefer showing results in Ibis over pasting large output into the terminal.
 
     You have Ibis tools (via MCP) scoped to THIS project window:
     - open_file(path, line): open a file in a tab for the human to see, optionally at a line.
     - reveal_in_tree(path): select a file in the file browser.
-    - open_content(title, content, format): open rich output in a new unsaved tab. Use markdown or html when the answer is best shown as a rendered report, summary, table, or document rather than plain terminal text.
-    - propose_edit and propose_patch: make code changes that the human reviews as a diff and approves before they are applied and saved.
+    - open_content(title, content, format): open rich output in a new unsaved tab. Use markdown or html when the answer is best shown as a rendered report, summary, table, or document rather than plain terminal text.\(reviewBullet)
     - ask_human(question, options): ask the human a question in their editor when it concerns what they are looking at.
     - notify(message): get the human attention with a one-line message. Ibis shows it as an in-window banner if they are looking at this window, or as a desktop notification if they are focused on another window or app.
     - get_active_file, get_selection, get_open_tabs, get_workspace_root: see what the human is currently focused on.
 
     When the human asks to open or see a file, use open_file. When they ask for information best represented richly, build it as markdown or html and open it with open_content.
 
-    The human often runs several Ibis windows at once and steps away while you work, so call notify at the moments that matter: when you finish a task or a long-running step, when you are blocked and need their input, and when there is a result worth their attention. Do not narrate every step with it - a notification is for when you need them to come back, not a running log. You do not need to check whether the window is focused first; Ibis decides whether the notification lands as a banner or on the desktop.
+    The human often runs several Ibis windows at once and steps away while you work, so call notify at the moments that matter: when you finish a task or a long-running step, when you are blocked and need their input, and when there is a result worth their attention. Do not narrate every step with it - a notification is for when you need them to come back, not a running log. You do not need to check whether the window is focused first; Ibis decides whether the notification lands as a banner or on the desktop.\(reviewDirective)
     """
+    }
+
+    /// The one Claude session id for a project: a version-5 (name-based, SHA-1)
+    /// UUID of the project's canonical root path under a fixed Ibis namespace.
+    /// Opening the agent in a project is therefore 100% mechanical — every
+    /// build, update, launch route, and reinstall derives the same id from the
+    /// path alone, with no persisted state to lose, evict, or race. Distinct
+    /// projects still get distinct UUIDs, which `claudeSessionFileExists`'s
+    /// global transcript scan relies on.
+    static func projectSessionID(for root: URL) -> String {
+        var named = Data(capacity: 16 + 256)
+        withUnsafeBytes(of: Self.sessionNamespace.uuid) { named.append(contentsOf: $0) }
+        named.append(contentsOf: canonicalSessionPath(root).utf8)
+        var bytes = Array(Insecure.SHA1.hash(data: named).prefix(16))
+        bytes[6] = (bytes[6] & 0x0F) | 0x50 // version 5
+        bytes[8] = (bytes[8] & 0x3F) | 0x80 // RFC 4122 variant
+        let uuid = UUID(uuid: (
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+            bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ))
+        // Lowercased to match the ids Claude mints for itself (and its
+        // transcript filenames).
+        return uuid.uuidString.lowercased()
+    }
+
+    /// Frozen forever: changing this (or the path canonicalization below)
+    /// orphans every project's existing ibis session.
+    private static let sessionNamespace = UUID(uuidString: "9A8FD3E6-3A5C-4E68-B1A4-7C21D0E6F3B7")!
+
+    /// A stable spelling of a project root: symlinks resolved (so `/tmp` and
+    /// `/private/tmp` agree) and no trailing slash — the same rule as
+    /// `MCPTokenStore`, so however the folder was opened it derives one id.
+    private static func canonicalSessionPath(_ root: URL) -> String {
+        var path = root.resolvingSymlinksInPath().standardizedFileURL.path(percentEncoded: false)
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
 
     /// The shell command to launch the configured agent, augmented with the Ibis
     /// orientation when we know how to inject it (Claude) and MCP is on. Returns
     /// nil if no agent is configured.
     ///
-    /// For Claude, `sessionID` pins the conversation to a stable UUID so window
-    /// restoration can bring it back: `--session-id` on a fresh launch
-    /// (`resume == false`), `--resume` on restore. The system prompt is applied
-    /// in both cases — `--append-system-prompt` is per-invocation (Claude does
-    /// not store it in the session), so a resumed conversation needs it
-    /// re-injected just like a fresh one.
+    /// For Claude, `sessionID` pins the conversation to the project's
+    /// deterministic UUID (`projectSessionID`): `--session-id` when the
+    /// conversation doesn't exist yet (`resume == false`), `--resume` when it
+    /// does. The system prompt is applied in both cases —
+    /// `--append-system-prompt` is per-invocation (Claude does not store it in
+    /// the session), so a resumed conversation needs it re-injected just like a
+    /// fresh one.
     static func launchCommand(
         settings: AppSettings, sessionID: String? = nil, resume: Bool = false,
         mcpConfig: String? = nil
@@ -287,7 +373,8 @@ enum MCPService {
             command += (resume ? " --resume " : " --session-id ") + sessionID
         }
         if settings.mcpEnabled, settings.agentInjectSystemPrompt {
-            let prompt = agentOrientation.replacingOccurrences(of: "'", with: "")
+            let prompt = agentOrientation(reviewToolEnabled: settings.mcpReviewToolEnabled)
+                .replacingOccurrences(of: "'", with: "")
             command += " --append-system-prompt '" + prompt + "'"
         }
         // Bind this project's Ibis MCP server on the command line rather than

@@ -1,6 +1,7 @@
 #if canImport(SwiftMCP)
 import Testing
 import Foundation
+import SwiftMCP
 @testable import Ibis
 
 /// Lifecycle integration for the embedded MCP server: binds a real listener on
@@ -35,11 +36,60 @@ import Foundation
         #expect(MCPService.isAvailable)
     }
 
-    @Test func agentOrientationEmbedsSafelyInSingleQuotes() {
+    @Test(arguments: [false, true]) func agentOrientationEmbedsSafelyInSingleQuotes(reviewToolEnabled: Bool) {
         // launchCommand wraps this in single quotes; an apostrophe would truncate
         // the shell argument mid-prompt.
-        #expect(!MCPService.agentOrientation.contains("'"))
-        #expect(!MCPService.agentOrientation.contains("\""))
+        let prompt = MCPService.agentOrientation(reviewToolEnabled: reviewToolEnabled)
+        #expect(!prompt.contains("'"))
+        #expect(!prompt.contains("\""))
+    }
+
+    @Test func agentOrientationMentionsReviewToolOnlyWhenExposed() {
+        #expect(MCPService.agentOrientation(reviewToolEnabled: true).contains("propose_edit"))
+        #expect(!MCPService.agentOrientation(reviewToolEnabled: false).contains("propose_edit"))
+    }
+
+    @Test func gatedServerHidesAndRejectsReviewToolWhenOff() async throws {
+        let server = GatedIbisMCPServer()
+        let wasExposed = MCPToolGate.reviewToolExposed
+        defer { MCPToolGate.reviewToolExposed = wasExposed }
+
+        MCPToolGate.reviewToolExposed = false
+        let hidden = server.mcpToolMetadata.map(\.name)
+        #expect(!hidden.contains("propose_edit"))
+        #expect(!hidden.contains("propose_patch"))
+        #expect(hidden.contains("open_file"), "only the review tool is gated")
+        // Calling anyway (an agent with a stale tool list) is rejected up
+        // front, not forwarded to the bridge.
+        await #expect(throws: MCPToolError.self) {
+            _ = try await server.callTool("propose_edit", arguments: [
+                "path": .string("/tmp/x.txt"), "newContent": .string("hi")
+            ])
+        }
+
+        MCPToolGate.reviewToolExposed = true
+        let shown = server.mcpToolMetadata.map(\.name)
+        #expect(shown.contains("propose_edit"))
+        #expect(shown.contains("propose_patch"))
+    }
+
+    @Test func projectSessionIDIsDeterministicPerProject() {
+        let a = URL(filePath: "/Users/someone/Development/proj-a")
+        let b = URL(filePath: "/Users/someone/Development/proj-b")
+
+        // Same path → same id, on every call, build, and launch — this is the
+        // whole contract. Distinct projects must still get distinct ids
+        // (claudeSessionFileExists's global transcript scan relies on it), and
+        // path spelling must not matter.
+        let sid = MCPService.projectSessionID(for: a)
+        #expect(MCPService.projectSessionID(for: a) == sid)
+        #expect(MCPService.projectSessionID(for: URL(filePath: "/Users/someone/Development/proj-a/")) == sid)
+        #expect(MCPService.projectSessionID(for: b) != sid)
+
+        // Well-formed for `claude --session-id` (and for Workspace's own
+        // shell-safety UUID gate), lowercased like Claude's own ids.
+        #expect(UUID(uuidString: sid) != nil)
+        #expect(sid == sid.lowercased())
     }
 
     @Test func launchCommandPinsSessionIdOnFreshClaudeLaunch() async {
