@@ -63,6 +63,7 @@ struct FileOutlineView: NSViewRepresentable {
         context.coordinator.outlineView = outlineView
         context.coordinator.installReloadBridge()
         context.coordinator.observeAccentChanges()
+        context.coordinator.observeGitStatus()
         outlineView.reloadData()
 
         return scrollView
@@ -108,30 +109,27 @@ struct FileOutlineView: NSViewRepresentable {
 
         private var accentObserver: NSObjectProtocol?
 
+        /// Set once the view has unmounted, so the Git observation stops
+        /// re-arming itself on every subsequent status refresh.
+        private var isTornDown = false
+
         init(workspace: Workspace, selection: Binding<FileNode.ID?>) {
             self.workspace = workspace
             self.selection = selection
         }
 
         /// Folder icons are tinted with a cached `NSColor`, so re-tint them when
-        /// the user changes the system accent so they follow it live.
+        /// the user changes the system accent so they follow it live. This goes
+        /// through the full decoration pass rather than assigning the accent
+        /// outright: an ignored row's icon is deliberately dimmed, and blanket
+        /// re-tinting would light it back up.
         func observeAccentChanges() {
             accentObserver = NotificationCenter.default.addObserver(
                 forName: NSColor.systemColorsDidChangeNotification,
                 object: nil,
                 queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.retintDirectoryIcons() }
-            }
-        }
-
-        private func retintDirectoryIcons() {
-            guard let outlineView else { return }
-            for row in 0..<outlineView.numberOfRows {
-                guard let node = outlineView.item(atRow: row) as? FileNode, node.isDirectory,
-                      let cell = outlineView.view(atColumn: 0, row: row, makeIfNecessary: false) as? NSTableCellView
-                else { continue }
-                cell.imageView?.contentTintColor = .ibisAccent
+                MainActor.assumeIsolated { self?.redecorateRows() }
             }
         }
 
@@ -212,6 +210,7 @@ struct FileOutlineView: NSViewRepresentable {
         /// Detaches everything that points back at this coordinator before the
         /// view unmounts (sidebar switched to Search, window closing).
         func teardown() {
+            isTornDown = true
             // Reveal/reload requests buffer in the workspace (replayed on
             // remount) instead of invoking a deallocated coordinator.
             workspace.onDirectoryReloaded = nil
@@ -290,21 +289,20 @@ struct FileOutlineView: NSViewRepresentable {
         func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
             guard let node = item as? FileNode else { return nil }
             let identifier = NSUserInterfaceItemIdentifier("FileCell")
-            let cell = (outlineView.makeView(withIdentifier: identifier, owner: self) as? NSTableCellView)
+            let cell = (outlineView.makeView(withIdentifier: identifier, owner: self) as? FileCellView)
                 ?? makeCell(identifier: identifier)
             cell.textField?.stringValue = node.name
             cell.imageView?.image = NSImage(
                 systemSymbolName: FileIconProvider.symbolName(for: node),
                 accessibilityDescription: node.isDirectory ? "Folder" : "File"
             )
-            cell.imageView?.contentTintColor = node.isDirectory
-                ? .ibisAccent
-                : .secondaryLabelColor
+            // Icon tint comes from `decorate` — it depends on Git state too.
+            decorate(cell, for: node)
             return cell
         }
 
-        private func makeCell(identifier: NSUserInterfaceItemIdentifier) -> NSTableCellView {
-            let cell = NSTableCellView()
+        private func makeCell(identifier: NSUserInterfaceItemIdentifier) -> FileCellView {
+            let cell = FileCellView()
             cell.identifier = identifier
 
             let imageView = NSImageView()
@@ -319,10 +317,20 @@ struct FileOutlineView: NSViewRepresentable {
             textField.target = self
             textField.action = #selector(commitRename(_:))
 
+            let badge = NSTextField(labelWithString: "")
+            badge.translatesAutoresizingMaskIntoConstraints = false
+            badge.font = .systemFont(ofSize: 10, weight: .semibold)
+            badge.alignment = .center
+            // The name truncates before the badge gives up any width.
+            badge.setContentCompressionResistancePriority(.required, for: .horizontal)
+            badge.setContentHuggingPriority(.required, for: .horizontal)
+
             cell.imageView = imageView
             cell.textField = textField
+            cell.badge = badge
             cell.addSubview(imageView)
             cell.addSubview(textField)
+            cell.addSubview(badge)
 
             NSLayoutConstraint.activate([
                 imageView.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 2),
@@ -330,10 +338,96 @@ struct FileOutlineView: NSViewRepresentable {
                 imageView.widthAnchor.constraint(equalToConstant: 16),
                 imageView.heightAnchor.constraint(equalToConstant: 16),
                 textField.leadingAnchor.constraint(equalTo: imageView.trailingAnchor, constant: 6),
-                textField.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
-                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
+                textField.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -4),
+                textField.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+                badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -6),
+                badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor)
             ])
             return cell
+        }
+
+        // MARK: Git decoration
+
+        /// Applies the row's Git state: a letter badge and a tinted name for a
+        /// changed file, a muted dot for a folder with changes somewhere inside,
+        /// and a dimmed name + icon for anything `.gitignore` excludes. Nothing
+        /// shows outside a repository, or for clean tracked paths.
+        private func decorate(_ cell: FileCellView, for node: FileNode) {
+            let info = workspace.git.info
+            let path = node.url.path(percentEncoded: false)
+            let isIgnored = info.isIgnored(at: path)
+
+            if let change = info.change(at: path) {
+                cell.badge?.stringValue = change.letter
+                cell.badge?.textColor = Self.color(for: change)
+                cell.badge?.toolTip = change.label
+                cell.badge?.setAccessibilityLabel(change.label)
+                cell.textField?.textColor = node.isDirectory ? .labelColor : Self.color(for: change)
+            } else if node.isDirectory, info.directoryHasChanges(at: path) {
+                cell.badge?.stringValue = "•"
+                cell.badge?.textColor = .tertiaryLabelColor
+                cell.badge?.toolTip = "Contains uncommitted changes"
+                cell.badge?.setAccessibilityLabel("Contains uncommitted changes")
+                cell.textField?.textColor = .labelColor
+            } else {
+                // Ignored rows are faded rather than badged: build output and
+                // `node_modules` are whole subtrees, and a mark on every line
+                // would shout louder than the handful of real changes.
+                cell.badge?.stringValue = ""
+                cell.badge?.toolTip = isIgnored ? "Ignored by Git" : nil
+                cell.badge?.setAccessibilityLabel(nil)
+                cell.textField?.textColor = isIgnored ? .tertiaryLabelColor : .labelColor
+            }
+            cell.textField?.setAccessibilityHelp(isIgnored ? "Ignored by Git" : nil)
+            cell.imageView?.contentTintColor = Self.iconTint(for: node, isIgnored: isIgnored)
+        }
+
+        /// Folder icons carry the accent; files sit back. An ignored row fades
+        /// both, so a dimmed subtree reads as one block.
+        private static func iconTint(for node: FileNode, isIgnored: Bool) -> NSColor {
+            if isIgnored { return .tertiaryLabelColor }
+            return node.isDirectory ? .ibisAccent : .secondaryLabelColor
+        }
+
+        private static func color(for change: GitStatusModel.FileChange) -> NSColor {
+            switch change {
+            case .untracked, .added: .systemGreen
+            case .modified, .renamed: .systemOrange
+            case .deleted, .conflicted: .systemRed
+            }
+        }
+
+        /// Re-decorates rows whenever Git status changes (a commit, a stage, an
+        /// edit the watcher noticed). Cells are reconfigured in place rather than
+        /// reloaded: `reloadItem` rebuilds the row's view, which would tear down
+        /// an in-progress inline rename and commit a half-typed name.
+        func observeGitStatus() {
+            guard !isTornDown else { return }
+            withObservationTracking {
+                _ = workspace.git.info
+            } onChange: { [weak self] in
+                // `onChange` fires *before* the new value lands, so read it (and
+                // re-arm) on the next main-actor hop.
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.redecorateRows()
+                    self.observeGitStatus()
+                }
+            }
+        }
+
+        /// Re-decorates every instantiated row — not just the ones inside
+        /// `visibleRect`. AppKit keeps a band of rows alive just outside the
+        /// viewport and doesn't re-run `viewFor` when they scroll in, so those
+        /// would otherwise carry a stale badge into view.
+        func redecorateRows() {
+            guard let outlineView else { return }
+            outlineView.enumerateAvailableRowViews { rowView, row in
+                guard let node = outlineView.item(atRow: row) as? FileNode,
+                      let cell = rowView.view(atColumn: 0) as? FileCellView
+                else { return }
+                decorate(cell, for: node)
+            }
         }
 
         /// A click in the outline: open the clicked file (even if its row was
@@ -801,6 +895,13 @@ extension FileOutlineView.Coordinator: QLPreviewPanelDataSource, QLPreviewPanelD
         }
         return false
     }
+}
+
+/// A file-browser row: the standard icon + editable name, plus a trailing Git
+/// badge (`M`, `U`, a roll-up dot, …). `NSTableCellView` only vends outlets for
+/// the first two, so the badge lives here.
+final class FileCellView: NSTableCellView {
+    var badge: NSTextField?
 }
 
 /// `NSOutlineView` subclass that supplies a per-row context menu, starts a

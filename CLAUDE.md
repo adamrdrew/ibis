@@ -206,6 +206,31 @@ extension MainActor default isolation anyway), so the SwiftMCP conformances
 written explicitly on the class declaration — the macro then skips emitting
 them. Don't remove them as "redundant".
 
+**Git decorations in the file browser** (`M`/`U`/`A`/`R`/`D` badges, roll-up dot)
+come from the same `git status --porcelain=v2` probe as the status bar — the
+per-file entries it already printed and used to throw away. Two path traps make
+this fiddly, and both fail *silently* (no badges, everything looks clean).
+(1) Porcelain paths are relative to the **repo top level**, not the folder that
+was opened, so `GitStatusModel` also runs `rev-parse --show-toplevel` and rebases
+them. (2) The tree mixes path spellings: `FileNode.url` for the root is whatever
+the folder was opened with, while `contentsOfDirectory(at:)` hands back
+**canonicalized** children (`/var/…` → `/private/var/…`), so states are indexed
+under *both* spellings. Canonicalize with `realpath(3)`, **not**
+`URL.resolvingSymlinksInPath()` — the latter leaves macOS firmlinks such as
+`/var` alone (it only adds a trailing slash), which is exactly the difference git
+introduces. Ignored paths are a separate axis from changes — they *dim* the row
+(name + icon) instead of badging it, and must never set `isDirty` or light up a
+folder's roll-up dot. `--ignored=traditional` collapses an ignored folder to one
+line (so `node_modules` costs one entry, not thousands) but still walks the
+working tree: it makes the probe ~10× slower, so it runs on a throttle
+(`ignoreProbeInterval`) with the previous ignore set carried across the cheap
+refreshes in between, or dimmed rows blink back on every filesystem event.
+Badges refresh via `withObservationTracking` on `git.info` and
+reconfigure cells in place through `enumerateAvailableRowViews` — never
+`reloadItem`, which rebuilds the row and would tear down an inline rename, and
+never just the rows in `visibleRect`, since AppKit keeps a band of live rows
+outside it that never re-run `viewFor`.
+
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit
 view tree and CALayer tree (class, frame, owner) and pixel-probe. That found the
