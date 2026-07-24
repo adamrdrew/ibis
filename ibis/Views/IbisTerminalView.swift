@@ -125,10 +125,12 @@ final class IbisTerminalView: LocalProcessTerminalView, SendToAgentResponding {
 /// construction: Return anywhere else (editor, file tree) is untouched.
 ///
 /// Two fixes share the monitor:
-/// 1. **⌘⏎ inserts a newline in agent TUIs.** SwiftTerm ignores the Command
-///    modifier and transmits a bare CR, so Claude Code submits the prompt
+/// 1. **⇧⏎ and ⌘⏎ insert a newline in agent TUIs.** SwiftTerm ignores both
+///    modifiers and transmits a bare CR, so Claude Code submits the prompt
 ///    instead of adding a line. We transmit ESC CR (the Option+Return
-///    sequence), which agent TUIs interpret as "insert newline".
+///    sequence), which agent TUIs interpret as "insert newline" — the same
+///    mapping Claude Code's own `/terminal-setup` installs for Shift+Return
+///    in iTerm2 and VS Code.
 /// 2. **Plain ⏎ in an *exited* terminal** triggers its restart affordance
 ///    (`IbisTerminalView.returnKeyAction`) instead of reaching the dead PTY.
 @MainActor
@@ -153,7 +155,7 @@ enum TerminalReturnKeyFix {
               let responder = event.window?.firstResponder as? NSView,
               let terminalView = enclosingIbisTerminalView(responder) else { return false }
         let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if modifiers == .command {
+        if modifiers == .command || modifiers == .shift {
             terminalView.send([0x1b, 0x0d]) // ESC CR — "insert newline" to agent TUIs
             return true
         }
