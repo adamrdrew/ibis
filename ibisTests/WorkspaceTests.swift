@@ -811,6 +811,27 @@ import Foundation
         }
     }
 
+    /// The buffer-vs-`expectedCurrent` check can't see a write that landed on
+    /// disk without the buffer noticing (the reconcile trails FSEvents), so the
+    /// save has to catch it — and the buffer must be put back rather than left
+    /// holding content the human approved against an out-of-date file.
+    @Test func applyProposedEditRefusesWhenDiskChangedUnderneath() async throws {
+        try await withWorkspace { workspace, dir in
+            let url = try writeFile("raced.txt", "v1", in: dir)
+            #expect(await workspace.applyProposedEdit(url: url, content: "v2", replacing: "v1") == .applied)
+
+            // Another program writes the file; nothing has reconciled the buffer.
+            try "someone else’s work".write(to: url, atomically: true, encoding: .utf8)
+
+            let outcome = await workspace.applyProposedEdit(url: url, content: "v3", replacing: "v2")
+            #expect(outcome == .diskChanged)
+            #expect(try String(contentsOf: url, encoding: .utf8) == "someone else’s work")
+            let doc = try #require(workspace.openedDocument(for: url))
+            #expect(doc.text == "v2")
+            #expect(doc.isDirty == false)
+        }
+    }
+
     @Test func applyProposedEditRefusesNonEditableFile() async throws {
         try await withWorkspace { workspace, dir in
             let url = dir.appending(path: "bin.dat")

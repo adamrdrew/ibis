@@ -121,8 +121,7 @@ import Foundation
             doc.text = "written by test"
             doc.registerUserEdit()
             #expect(doc.isDirty)
-            let ok = await doc.save()
-            #expect(ok)
+            #expect(await doc.save().didSave)
             #expect(doc.isDirty == false)
             #expect(try String(contentsOf: url, encoding: .utf8) == "written by test")
         }
@@ -132,8 +131,114 @@ import Foundation
         let doc = OpenDocument()
         doc.text = "x"
         doc.registerUserEdit()
-        let ok = await doc.save()
-        #expect(ok == false)
+        guard case .noURL = await doc.save() else {
+            Issue.record("an untitled document has nowhere to save to")
+            return
+        }
+    }
+
+    /// The core anti-clobber guarantee: a save must consult *disk*, not the
+    /// FSEvents-driven `hasExternalChanges` flag. No `reconcileWithDisk()` call
+    /// here on purpose — that models the real race, where the user hits ⌘S
+    /// inside the watcher's latency and the flag is still stale.
+    @Test func saveRefusesToClobberAnUnnoticedExternalChange() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "my unsaved work"
+            doc.registerUserEdit()
+
+            try "written by the agent".write(to: url, atomically: true, encoding: .utf8)
+            #expect(doc.hasExternalChanges == false) // nothing has reconciled yet
+
+            guard case .conflict = await doc.save() else {
+                Issue.record("save overwrote a change made outside Ibis")
+                return
+            }
+            #expect(try String(contentsOf: url, encoding: .utf8) == "written by the agent")
+            #expect(doc.isDirty)
+            #expect(doc.text == "my unsaved work")
+            // The refused save is what noticed the divergence, so the editor's
+            // "changed on disk" banner must now be up.
+            #expect(doc.hasExternalChanges)
+        }
+    }
+
+    @Test func forcedSaveOverwritesAnExternalChange() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "mine"
+            doc.registerUserEdit()
+            try "theirs".write(to: url, atomically: true, encoding: .utf8)
+
+            #expect(await doc.save(force: true).didSave)
+            #expect(try String(contentsOf: url, encoding: .utf8) == "mine")
+            #expect(doc.isDirty == false)
+            #expect(doc.hasExternalChanges == false)
+        }
+    }
+
+    /// The conflict check must not fire on our own writes — including a second
+    /// save right after the first, which compares against the metadata the first
+    /// one recorded.
+    @Test func repeatedSavesDoNotReportAConflict() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "second"
+            doc.registerUserEdit()
+            #expect(await doc.save().didSave)
+            doc.text = "third and rather longer"
+            doc.registerUserEdit()
+            #expect(await doc.save().didSave)
+            #expect(try String(contentsOf: url, encoding: .utf8) == "third and rather longer")
+        }
+    }
+
+    /// The save-time stat must resolve symlinks the same way the write and
+    /// `reconcileWithDisk` do — statting the link's own inode would report a
+    /// conflict on every save through a symlink.
+    @Test func savingThroughASymlinkDoesNotReportAConflict() async throws {
+        try await TestSupport.withTempDir { dir in
+            let target = dir.appending(path: "real.txt")
+            let link = dir.appending(path: "link.txt")
+            try "v1".write(to: target, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+
+            let doc = OpenDocument(url: link)
+            await doc.loadIfNeeded()
+            doc.text = "through the link"
+            doc.registerUserEdit()
+            #expect(await doc.save().didSave)
+            #expect(try String(contentsOf: target, encoding: .utf8) == "through the link")
+        }
+    }
+
+    /// A vanished file is not a conflict: there's nothing to clobber, and the
+    /// editor's banner promises that saving recreates it.
+    @Test func savingRecreatesADeletedFile() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "v1".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "kept"
+            doc.registerUserEdit()
+            try FileManager.default.removeItem(at: url)
+            await doc.reconcileWithDisk()
+            #expect(doc.isFileMissing)
+
+            #expect(await doc.save().didSave)
+            #expect(try String(contentsOf: url, encoding: .utf8) == "kept")
+            #expect(doc.isFileMissing == false)
+        }
     }
 
     // MARK: - Save As / adopt

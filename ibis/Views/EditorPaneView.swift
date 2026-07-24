@@ -155,7 +155,7 @@ struct EditorPaneView: View {
                         )
                     } else if document.hasExternalChanges {
                         editorNotice(
-                            "This file changed on disk. Saving will overwrite those changes.",
+                            "This file changed on disk. Saving will ask before overwriting those changes.",
                             systemImage: "exclamationmark.triangle.fill"
                         )
                     }

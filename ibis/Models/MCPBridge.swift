@@ -245,6 +245,8 @@ final class MCPBridge {
                 throw MCPToolFailure("Couldn’t write \(url.lastPathComponent) — it may be read-only, binary, or on an unwritable volume. Nothing was changed.")
             case .saveFailed:
                 throw MCPToolFailure("The approved change was applied to the open editor buffer, but saving \(url.lastPathComponent) to disk failed (read-only file? full volume?). The buffer now shows the change as unsaved; the file on disk is unchanged.")
+            case .diskChanged:
+                throw MCPToolFailure("\(url.lastPathComponent) was changed on disk by another program while the diff was under review, so nothing was applied. Re-read the file and propose the edit again.")
             }
         }
         return "The human declined the changes to \(url.lastPathComponent)."
