@@ -167,7 +167,7 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
 
         // Make the mouse wheel scroll full-screen TUIs (Claude Code, less, vim…).
         TerminalScrollFix.installIfNeeded()
-        // Make ⌘⏎ insert a newline in agent TUIs instead of submitting.
+        // Make ⇧⏎/⌘⏎ insert a newline in agent TUIs instead of submitting.
         TerminalReturnKeyFix.installIfNeeded()
 
         let view = IbisTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 360))
