@@ -230,22 +230,43 @@ final class OpenDocument: Identifiable {
         fileSize = values?.fileSize
     }
 
+    /// How a save ended. Distinguishes "refused to clobber a change made outside
+    /// Ibis" from an ordinary write failure, so the caller can offer the user a
+    /// choice instead of a dead-end error.
+    enum SaveOutcome: Sendable {
+        case saved
+        /// Untitled: there's no URL to write to — route to Save As.
+        case noURL
+        /// Read-only (non-UTF-8), binary, or failed to load: writing the buffer
+        /// would corrupt the file.
+        case notEditable
+        /// The file changed on disk after we last loaded or saved it. Nothing was
+        /// written; `save(force: true)` overwrites, `revertToSaved(force: true)`
+        /// discards the buffer instead.
+        case conflict
+        case failed(String)
+
+        var didSave: Bool { if case .saved = self { true } else { false } }
+    }
+
     /// The in-flight save, if any. Saves chain on it so two overlapping saves
     /// can't write out of order (the older content landing on disk last while
     /// the buffer is already marked clean).
-    @ObservationIgnored private var pendingSave: Task<Bool, Never>?
+    @ObservationIgnored private var pendingSave: Task<SaveOutcome, Never>?
     @ObservationIgnored private var saveTicket = 0
 
-    /// Saves to disk. Returns `false` for an untitled document (no URL yet) —
-    /// the caller must route to Save As — or if the write fails.
+    /// Saves to disk. Returns `.conflict` — without writing — when the file
+    /// changed outside Ibis since we last read or wrote it; pass `force` (after
+    /// the user has confirmed) to overwrite it anyway.
     @discardableResult
-    func save() async -> Bool {
+    func save(force: Bool = false) async -> SaveOutcome {
         let previous = pendingSave
         saveTicket += 1
         let ticket = saveTicket
         let task = Task { [weak self] in
             _ = await previous?.value
-            return await self?.performSave() ?? false
+            guard let self else { return SaveOutcome.failed("The document was closed before it could be saved.") }
+            return await self.performSave(force: force)
         }
         pendingSave = task
         let result = await task.value
@@ -255,17 +276,42 @@ final class OpenDocument: Identifiable {
         return result
     }
 
-    private func performSave() async -> Bool {
-        guard isEditable, let fileURL = url else { return false }
+    private func performSave(force: Bool) async -> SaveOutcome {
+        guard let fileURL = url else { return .noURL }
+        guard isEditable else { return .notEditable }
         // Write to the symlink target, not the link itself, so an atomic replace
         // updates the real file (and keeps the link intact).
         let writeURL = fileURL.resolvingSymlinksInPath()
         let contents = text
         let generation = editGeneration
+        let expectedDate = fileModificationDate
+        let expectedSize = fileSize
         let outcome = await Task.detached(priority: .userInitiated) { () -> WriteOutcome in
+            // Check for an external change *here*, as late as possible before the
+            // write — not from `hasExternalChanges`. That flag is set by the
+            // FSEvents-driven reconcile, which trails reality by the watcher's
+            // latency, so a save landing inside that window (exactly what happens
+            // when the user is watching an agent edit the file and hits ⌘S the
+            // moment it finishes) would see a stale `false` and clobber the file.
+            //
+            // A nil baseline means we have nothing to compare against (never
+            // loaded), and a failed stat means the file is gone — saving then
+            // legitimately recreates it. Neither is a conflict.
+            if !force, expectedDate != nil || expectedSize != nil,
+               let current = try? writeURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]),
+               current.contentModificationDate != expectedDate || current.fileSize != expectedSize {
+                return .conflict
+            }
             do {
                 try contents.write(to: writeURL, atomically: true, encoding: .utf8)
-                let values = try? writeURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
+                // Stat through a *fresh* URL. `writeURL` cached its resource
+                // values during the conflict check above, so reusing it hands
+                // back the pre-write date/size — we'd record stale metadata and
+                // the next save would report a bogus conflict against our own
+                // write.
+                var probe = writeURL
+                probe.removeAllCachedResourceValues()
+                let values = try? probe.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey])
                 return .success(values?.contentModificationDate, values?.fileSize)
             } catch {
                 return .failure(error.localizedDescription)
@@ -280,9 +326,14 @@ final class OpenDocument: Identifiable {
             // Only clear the dirty flag if no newer edits arrived while the write
             // was in flight; otherwise those edits would be lost silently.
             if editGeneration == generation { isDirty = false }
-            return true
-        case .failure:
-            return false
+            return .saved
+        case .conflict:
+            // The reconcile hadn't caught up (or never ran) — raise the banner
+            // now so the editor reflects what the save just discovered.
+            hasExternalChanges = true
+            return .conflict
+        case .failure(let message):
+            return .failed(message)
         }
     }
 
@@ -349,6 +400,9 @@ final class OpenDocument: Identifiable {
 
     private enum WriteOutcome: Sendable {
         case success(Date?, Int?)
+        /// The file changed on disk since we last read or wrote it; nothing was
+        /// written.
+        case conflict
         case failure(String)
     }
 

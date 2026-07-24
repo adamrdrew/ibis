@@ -127,6 +127,10 @@ final class Workspace {
         /// unsaved; disk is untouched — distinct from `notWritable`, where
         /// nothing changed anywhere.
         case saveFailed
+        /// The file changed on disk between the diff being computed and the
+        /// human approving it, so applying would clobber a change nobody
+        /// reviewed. The buffer is left as it was; disk is untouched.
+        case diskChanged
     }
 
     func applyProposedEdit(url: URL, content: String, replacing expectedCurrent: String) async -> ApplyEditOutcome {
@@ -158,10 +162,30 @@ final class Workspace {
         await document.loadIfNeeded()
         guard document.isEditable else { return .notWritable }
         guard document.text == expectedCurrent else { return .staleContent }
+        // The buffer matching `expectedCurrent` doesn't prove *disk* still does:
+        // an unreconciled external write leaves the buffer stale too. The save
+        // below catches that, and this snapshot lets us undo the buffer change
+        // rather than leaving agent content the human approved against an
+        // out-of-date file sitting dirty in their tab.
+        let previousText = document.text
+        let wasDirty = document.isDirty
         document.text = content
         document.isDirty = true
         layout.activePane?.open(document)
-        return await document.save() ? .applied : .saveFailed
+        switch await document.save() {
+        case .saved:
+            return .applied
+        case .conflict:
+            document.text = previousText
+            document.isDirty = wasDirty
+            return .diskChanged
+        case .noURL, .notEditable:
+            document.text = previousText
+            document.isDirty = wasDirty
+            return .notWritable
+        case .failed:
+            return .saveFailed
+        }
     }
 
     /// The already-open document for a URL, if any (without creating one).
@@ -858,13 +882,65 @@ final class Workspace {
 
     func saveActiveDocument() async {
         guard let document = activeDocument else { return }
-        if document.isUntitled {
-            await saveAs(document) // presents its own error on failure
-        } else {
-            let saved = await document.save()
-            if !saved {
-                presentError("Couldn’t save “\(document.name)”. Check that the file is writable and the volume has space.")
-            }
+        await saveDocument(document)
+    }
+
+    /// The single choke point for saving a document: routes untitled buffers to
+    /// Save As, asks the user what to do when the file changed on disk behind
+    /// us, and reports write failures. Every save the user can trigger (⌘S, the
+    /// Save button when closing a tab or a window) goes through here — calling
+    /// `OpenDocument.save()` directly would silently overwrite an external
+    /// change. Returns whether the buffer's contents are now on disk.
+    @discardableResult
+    func saveDocument(_ document: OpenDocument) async -> Bool {
+        if document.isUntitled { return await saveAs(document) }
+        return await resolve(await document.save(), for: document)
+    }
+
+    private func resolve(_ outcome: OpenDocument.SaveOutcome, for document: OpenDocument) async -> Bool {
+        switch outcome {
+        case .saved:
+            return true
+        case .noURL:
+            return await saveAs(document) // presents its own error on failure
+        case .conflict:
+            return await resolveSaveConflict(document)
+        case .notEditable:
+            presentError("“\(document.name)” can’t be saved because it isn’t editable text (it’s read-only or binary).")
+            return false
+        case .failed(let message):
+            presentError("Couldn’t save “\(document.name)”: \(message)")
+            return false
+        }
+    }
+
+    /// Asks what to do about a save that would clobber a change made outside
+    /// Ibis. Without a window to attach the sheet to we can't ask, so the save
+    /// stays refused — losing the user's keystrokes is recoverable (the buffer
+    /// keeps them), silently destroying someone else's write is not.
+    private func resolveSaveConflict(_ document: OpenDocument) async -> Bool {
+        guard let window = window ?? NSApp.keyWindow else {
+            presentError("“\(document.name)” changed on disk, so it wasn’t saved.")
+            return false
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(document.name)” was changed by another program."
+        alert.informativeText = "Saving will replace those changes with your unsaved version."
+        alert.addButton(withTitle: "Save Anyway")
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Revert to Disk")
+        let response = await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+        switch response {
+        case .alertFirstButtonReturn: // Save Anyway — force past the disk check.
+            return await resolve(await document.save(force: true), for: document)
+        case .alertThirdButtonReturn: // Revert to Disk — discard the buffer's edits.
+            await document.revertToSaved(force: true)
+            return false // nothing of the user's was written; don't close over it
+        default:
+            return false
         }
     }
 
@@ -974,23 +1050,15 @@ final class Workspace {
             guard let self else { completion(false); return }
             switch response {
             case .alertFirstButtonReturn: // Save
-                if document.isUntitled {
-                    Task {
-                        if await self.saveAs(document) {
-                            self.closeTab(document, in: pane)
-                            completion(true)
-                        } else {
-                            completion(false)
-                        }
-                    }
-                } else {
-                    Task {
-                        if await document.save() {
-                            self.closeTab(document, in: pane)
-                            completion(true)
-                        } else {
-                            completion(false)
-                        }
+                Task {
+                    // Routed through `saveDocument` so an untitled buffer gets a
+                    // Save panel and a file changed on disk gets its own prompt,
+                    // rather than the close silently overwriting it.
+                    if await self.saveDocument(document) {
+                        self.closeTab(document, in: pane)
+                        completion(true)
+                    } else {
+                        completion(false)
                     }
                 }
             case .alertThirdButtonReturn: // Don't Save
@@ -1606,18 +1674,14 @@ final class Workspace {
     }
 
     /// Saves every dirty document before the window closes, routing untitled
-    /// buffers through a Save panel. Returns `true` only if *all* saves
-    /// succeeded (a cancelled Save panel or a write failure returns `false`), so
-    /// the caller can keep the window open rather than lose the edits.
+    /// buffers through a Save panel and files changed on disk through the
+    /// conflict prompt. Returns `true` only if *all* saves succeeded (a
+    /// cancelled Save panel, a declined overwrite, or a write failure returns
+    /// `false`), so the caller can keep the window open rather than lose edits.
     private func saveAllForClose(_ dirty: [OpenDocument]) async -> Bool {
         var allSucceeded = true
         for document in dirty {
-            if document.isUntitled {
-                if !(await saveAs(document)) { allSucceeded = false }
-            } else {
-                let saved = await document.save()
-                if !saved { allSucceeded = false }
-            }
+            if !(await saveDocument(document)) { allSucceeded = false }
         }
         return allSucceeded
     }
