@@ -53,7 +53,7 @@ struct CodeEditorView: NSViewRepresentable {
             coordinator?.activateHandler()
         }
         textView.onAppearanceChange = { [weak coordinator = context.coordinator] in
-            coordinator?.scheduleHighlight(debounced: false)
+            coordinator?.appearanceChanged()
         }
         textView.onSendToAgent = onSendToAgent
         textView.agentName = agentName
@@ -99,11 +99,13 @@ struct CodeEditorView: NSViewRepresentable {
         context.coordinator.ruler = ruler
         context.coordinator.observeScrolling(in: scrollView)
         context.coordinator.observeAccentChanges()
+        // Register this pane with the document's highlighter, which owns the
+        // colouring of the shared buffer for every pane showing this file.
+        context.coordinator.attachHighlighter()
 
         // The shared storage already holds the text; no need to assign a string.
         configure(textView, in: scrollView, ruler: ruler)
         syncCoordinator(context.coordinator)
-        context.coordinator.language = Language.highlightName(for: document.url)
         context.coordinator.lastContentVersion = document.contentVersion
         // Seed the focus token with the pane's *current* value: the token is
         // monotonic and never resets, while this coordinator is fresh per tab
@@ -129,7 +131,10 @@ struct CodeEditorView: NSViewRepresentable {
             // updateNSView scrolls to the start at that moment.
             context.coordinator.hasScrolledToStart = false
         }
-        context.coordinator.scheduleHighlight(debounced: false)
+        // Tell the highlighter what this pane can see before the first pass, so
+        // it parses far enough to cover the viewport rather than only its floor.
+        context.coordinator.reportViewport()
+        document.highlighter.refresh()
 
         return scrollView
     }
@@ -181,9 +186,7 @@ struct CodeEditorView: NSViewRepresentable {
 
         // The URL can change under a stable document (Save As of an untitled
         // buffer), which may change the language — refresh it.
-        let language = Language.highlightName(for: document.url)
-        if context.coordinator.language != language {
-            context.coordinator.language = language
+        if context.coordinator.language != Language.highlightName(for: document.url) {
             needsHighlight = true
         }
 
@@ -197,8 +200,11 @@ struct CodeEditorView: NSViewRepresentable {
         }
         syncCoordinator(context.coordinator)
 
+        // Typing never lands here: the highlighter watches the shared storage
+        // itself, so this is only the out-of-band triggers (font/theme change,
+        // a new language after Save As, a programmatic content replacement).
         if needsHighlight {
-            context.coordinator.scheduleHighlight(debounced: false)
+            document.highlighter.refresh()
         }
 
         applyPendingSelectionIfNeeded(context.coordinator)
@@ -238,17 +244,22 @@ struct CodeEditorView: NSViewRepresentable {
         }
     }
 
-    /// Pushes the current representable values the coordinator needs.
+    /// Pushes the current representable values the coordinator needs, and the
+    /// styling inputs through to the document-level highlighter.
     private func syncCoordinator(_ coordinator: Coordinator) {
         coordinator.softTabsEnabled = configuration.usesSoftTabs
         coordinator.tabWidth = configuration.tabWidth
         coordinator.activateHandler = onActivate
-        coordinator.baseFont = makeFont()
-        coordinator.fontName = configuration.fontName
-        coordinator.fontSize = configuration.fontSize
-        coordinator.lightThemeName = configuration.lightTheme
-        coordinator.darkThemeName = configuration.darkTheme
         coordinator.lastConfiguration = configuration
+
+        let highlighter = document.highlighter
+        highlighter.language = Language.highlightName(for: document.url)
+        highlighter.baseFont = makeFont()
+        highlighter.fontName = configuration.fontName
+        highlighter.fontSize = configuration.fontSize
+        highlighter.lightThemeName = configuration.lightTheme
+        highlighter.darkThemeName = configuration.darkTheme
+        coordinator.syncAppearance()
     }
 
     // MARK: - Configuration
@@ -352,8 +363,64 @@ struct CodeEditorView: NSViewRepresentable {
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
                     self?.ruler?.needsDisplay = true
+                    // Scrolling can reveal text past what the highlighter has
+                    // parsed. Reporting is cheap and self-throttling: the
+                    // highlighter only schedules work once the viewport runs
+                    // past its look-ahead margin.
+                    self?.reportViewport()
                 }
             }
+        }
+
+        // MARK: - Syntax highlighting
+        //
+        // The work itself lives on `document.highlighter` (one highlighter per
+        // document, not per pane). This pane's job is to say who it is, what it
+        // can see, and to wear the theme's background colour.
+
+        /// Identifies this pane to the document's highlighter.
+        let highlighterClientID = UUID()
+
+        func attachHighlighter() {
+            document.highlighter.attach(highlighterClientID) { [weak self] background in
+                guard let self else { return }
+                let color = background?.nsColor ?? .textBackgroundColor
+                self.textView?.backgroundColor = color
+                self.textView?.insertionPointColor = .ibisAccent
+                self.ruler?.backgroundColor = color
+                self.ruler?.needsDisplay = true
+            }
+        }
+
+        /// The language the highlighter was last told to use, so `updateNSView`
+        /// can notice a Save As that changes the file's type.
+        var language: String? { document.highlighter.language }
+
+        /// Reports how far into the buffer this pane can currently see, so the
+        /// highlighter parses far enough to cover it and no further.
+        func reportViewport() {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let container = textView.textContainer,
+                  let scrollView = textView.enclosingScrollView else { return }
+            let visibleRect = scrollView.contentView.bounds
+            let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: container)
+            let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+            document.highlighter.reportViewport(highlighterClientID, charEnd: NSMaxRange(charRange))
+        }
+
+        /// Mirrors this pane's effective appearance onto the highlighter, which
+        /// picks the light or dark theme from it.
+        func syncAppearance() {
+            guard let textView else { return }
+            document.highlighter.isDark = textView.effectiveAppearance
+                .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        }
+
+        /// The system flipped between light and dark: re-theme immediately.
+        func appearanceChanged() {
+            syncAppearance()
+            document.highlighter.refresh()
         }
 
         /// Refreshes this editor's gutter whenever the *shared* storage's
@@ -399,103 +466,94 @@ struct CodeEditorView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             // The text lives in the shared storage the text view already edits in
-            // place, so there's nothing to copy back — just record the edit (dirty
-            // + edit generation for the in-flight-save guard) and re-highlight.
+            // place, so there's nothing to copy back — just record the edit
+            // (dirty + edit generation for the in-flight-save guard).
+            //
+            // Neither the gutter nor the highlighter is poked directly here. The
+            // storage notification has already scheduled both, and routing this
+            // through the same deferred path is what keeps them to one refresh
+            // per runloop turn instead of doing the work twice for one keystroke.
             document.registerUserEdit()
-            ruler?.updateThickness()
-            ruler?.needsDisplay = true
-            scheduleHighlight(debounced: true)
+            scheduleGutterRefresh()
         }
 
-        // MARK: - Syntax highlighting
+        // MARK: - Typing colour continuity
 
-        /// Runs a highlight pass, optionally after a short debounce so typing
-        /// stays smooth. Supersedes any in-flight pass.
-        func scheduleHighlight(debounced: Bool) {
-            highlightTask?.cancel()
-            highlightTask = Task { [weak self] in
-                if debounced {
-                    try? await Task.sleep(for: .milliseconds(150))
-                }
-                guard let self, !Task.isCancelled else { return }
-                await self.performHighlight()
-            }
+        /// What counts as "inside a word" when deciding whether to carry a
+        /// token's colour forward onto the characters being typed.
+        private static let wordCharacters: CharacterSet = {
+            var set = CharacterSet.alphanumerics
+            set.insert(charactersIn: "_")
+            return set
+        }()
+
+        /// Gives text about to be inserted the colour of the token it is being
+        /// typed into.
+        ///
+        /// The editor is a plain-text `NSTextView` (`isRichText = false`), so
+        /// insertions take the view's text colour and stay plain until the next
+        /// highlight pass reaches them — every word visibly flashes white as it's
+        /// typed. No parse is instant, but while the caret sits *inside* a word
+        /// that word's classification almost never changes between keystrokes, so
+        /// inheriting the neighbouring colour is right nearly always, and a wrong
+        /// guess is corrected by the next pass just as the plain colour would be.
+        ///
+        /// The effect compounds, which is the point: the inherited colour is
+        /// written into the inserted character, so the *next* keystroke inherits
+        /// from that one. Once any character of a word has been classified, the
+        /// rest of the word stays coloured as it's typed.
+        ///
+        /// Deliberately scoped to mid-word insertions. Inheriting across a space
+        /// or newline would be actively wrong — a line typed under a comment
+        /// would come out comment-coloured.
+        func textView(
+            _ textView: NSTextView,
+            shouldChangeTextIn affectedCharRange: NSRange,
+            replacementString: String?
+        ) -> Bool {
+            applyTypingStyle(in: textView, at: affectedCharRange, inserting: replacementString)
+            return true
         }
 
-        private func performHighlight() async {
-            guard let language else {
-                applyPlainColors()
+        private func applyTypingStyle(in textView: NSTextView, at range: NSRange, inserting replacement: String?) {
+            guard let storage = textView.textStorage,
+                  range.length == 0,                    // an insertion, not a replacement
+                  range.location > 0,
+                  range.location <= storage.length,
+                  let replacement, !replacement.isEmpty,
+                  replacement.unicodeScalars.allSatisfy(Self.wordCharacters.contains),
+                  isWordCharacter(at: range.location - 1, in: storage)
+            else {
+                resetTypingStyle(in: textView)
                 return
             }
-            guard let textView else { return }
-            let code = textView.string
-            // Skip pathologically large files to avoid blocking on the JS engine.
-            guard (code as NSString).length <= 200_000 else {
-                applyPlainColors()
-                return
+
+            let previous = range.location - 1
+            var attributes = textView.typingAttributes
+            if let color = storage.attribute(.foregroundColor, at: previous, effectiveRange: nil) {
+                attributes[.foregroundColor] = color
             }
-
-            let isDark = textView.effectiveAppearance
-                .bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            let theme = isDark ? darkThemeName : lightThemeName
-
-            let result = await SyntaxHighlighter.shared.highlight(
-                code: code,
-                language: language,
-                theme: theme,
-                fontName: fontName,
-                fontSize: fontSize
-            )
-
-            guard let result, !Task.isCancelled,
-                  let liveTextView = self.textView,
-                  let storage = liveTextView.textStorage,
-                  liveTextView.string == code,
-                  storage.length == result.sourceLength else { return }
-
-            apply(result, to: liveTextView, storage: storage)
+            // Carried too, so a bold or italic token doesn't reflow mid-word.
+            if let font = storage.attribute(.font, at: previous, effectiveRange: nil) {
+                attributes[.font] = font
+            }
+            textView.typingAttributes = attributes
         }
 
-        private func apply(_ result: HighlightResult, to textView: NSTextView, storage: NSTextStorage) {
-            let fontManager = NSFontManager.shared
-            let full = NSRange(location: 0, length: storage.length)
-
-            storage.beginEditing()
-            storage.removeAttribute(.foregroundColor, range: full)
-            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: full)
-            storage.addAttribute(.font, value: baseFont, range: full)
-
-            for run in result.runs {
-                let range = NSIntersectionRange(run.range, full)
-                guard range.length > 0 else { continue }
-                storage.addAttribute(.foregroundColor, value: run.color.nsColor, range: range)
-                if run.isBold || run.isItalic {
-                    var font = baseFont
-                    if run.isBold { font = fontManager.convert(font, toHaveTrait: .boldFontMask) }
-                    if run.isItalic { font = fontManager.convert(font, toHaveTrait: .italicFontMask) }
-                    storage.addAttribute(.font, value: font, range: range)
-                }
-            }
-            storage.endEditing()
-
-            let backgroundColor = result.background?.nsColor ?? .textBackgroundColor
-            textView.backgroundColor = backgroundColor
-            textView.insertionPointColor = .ibisAccent
-            ruler?.backgroundColor = backgroundColor
-            ruler?.needsDisplay = true
+        private func isWordCharacter(at index: Int, in storage: NSTextStorage) -> Bool {
+            let text = storage.string as NSString
+            guard index >= 0, index < text.length,
+                  let scalar = UnicodeScalar(text.character(at: index)) else { return false }
+            return Self.wordCharacters.contains(scalar)
         }
 
-        /// Resets the document to the default text color (used for unrecognized
-        /// or oversized files).
-        private func applyPlainColors() {
-            guard let textView, let storage = textView.textStorage else { return }
-            let full = NSRange(location: 0, length: storage.length)
-            storage.beginEditing()
-            storage.addAttribute(.foregroundColor, value: NSColor.textColor, range: full)
-            storage.addAttribute(.font, value: baseFont, range: full)
-            storage.endEditing()
-            textView.backgroundColor = NSColor.textBackgroundColor
-            ruler?.backgroundColor = NSColor.textBackgroundColor
+        /// Back to the plain colour, so a new word doesn't start out wearing the
+        /// previous token's colour.
+        private func resetTypingStyle(in textView: NSTextView) {
+            var attributes = textView.typingAttributes
+            attributes[.foregroundColor] = NSColor.textColor
+            attributes[.font] = document.highlighter.baseFont
+            textView.typingAttributes = attributes
         }
 
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -516,12 +574,6 @@ struct CodeEditorView: NSViewRepresentable {
         var softTabsEnabled = true
         var tabWidth = 4
         var activateHandler: () -> Void = {}
-        var baseFont: NSFont = .monospacedSystemFont(ofSize: 13, weight: .regular)
-        var fontName = "SF Mono"
-        var fontSize: Double = 13
-        var lightThemeName = EditorTheme.light
-        var darkThemeName = EditorTheme.dark
-        var language: String?
         var lastConfiguration: EditorConfiguration?
         /// The document content version last synced, so a shared-buffer edit from
         /// another pane triggers a single re-highlight rather than a clobber.
@@ -539,7 +591,6 @@ struct CodeEditorView: NSViewRepresentable {
         /// current (monotonic, never-reset) token so only requests issued
         /// *after* mount grab focus.
         var lastFocusRequest = 0
-        private var highlightTask: Task<Void, Never>?
 
         /// Selections saved at editor teardown, keyed by document id, so
         /// switching tabs A→B→A restores A's caret and approximate scroll
@@ -589,9 +640,11 @@ struct CodeEditorView: NSViewRepresentable {
             textView.scrollRangeToVisible(NSRange(location: 0, length: 0))
         }
 
-        /// Removes this pane's layout manager from the document's shared storage.
+        /// Removes this pane's layout manager from the document's shared storage
+        /// and unregisters it from the document's highlighter (which stops
+        /// highlighting entirely once its last pane goes away).
         func detachFromStorage() {
-            highlightTask?.cancel()
+            document.highlighter.detach(highlighterClientID)
             if let layoutManager = textView?.layoutManager,
                let storage = layoutManager.textStorage {
                 storage.removeLayoutManager(layoutManager)

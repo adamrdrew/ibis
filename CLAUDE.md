@@ -49,7 +49,9 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
   `FileOperations`, `SecurityScopedAccess`.
 - **Syntax/** — `Language` (ext → highlight.js name), `SyntaxHighlighter`
   (actor wrapping the **HighlighterSwift** package; engine is swappable behind
-  this seam), `ProjectSearch`.
+  this seam), `DocumentHighlighter` (per-document highlight orchestration —
+  debounce, viewport limiting, diff application; see the gotcha below),
+  `ProjectSearch`.
 - **Views/** — `WorkspaceView` (NavigationSplitView; editor + terminal dock
   [bottom or trailing] + `StatusBarView` git bar), `FileOutlineView`
   (NSOutlineView-backed browser), `CodeEditorView` + `LineNumberRulerView`
@@ -230,6 +232,76 @@ reconfigure cells in place through `enumerateAvailableRowViews` — never
 `reloadItem`, which rebuilds the row and would tear down an inline rename, and
 never just the rows in `visibleRect`, since AppKit keeps a band of live rows
 outside it that never re-run `viewFor`.
+
+**Syntax highlighting is where typing performance lives or dies.** Four rules,
+each of which was once broken and measurably cost typing latency. Measure before
+changing any of them — reading the code led to three wrong hypotheses (the ruler's
+full-document newline scan, `textView.string` bridging, and `isDirty` invalidating
+SwiftUI) that all turned out to be free.
+
+1. **Never apply attributes over a range that already has them.** `addAttribute`
+   invalidates TextKit layout across the range it touches *even when the value is
+   identical*, and NSTextView then re-lays-out the whole document on the main
+   thread: 14 ms at 1,700 lines, 43 ms at 5,100, versus 0 ms when nothing is
+   written. The old code blanket-rewrote `.foregroundColor` and `.font` across the
+   buffer every pass. `DocumentHighlighter.write(_:_:over:)` compares first and
+   skips — after a keystroke the recomputed colours match what's already there, so
+   a pass performs *zero* writes. This is the single biggest win; don't "simplify"
+   it back into a blanket write.
+2. **Cancelling the `Task` does not cancel the parse.** `SyntaxHighlighter` is one
+   serialized actor shared by every pane and window; work already dispatched into
+   it runs to completion regardless of the caller's `cancel()`. A typing burst used
+   to queue whole-document parses that each ran fully and were then discarded
+   (three queued 210 KB passes = 1,015 ms, blocking every other tab). Hence the
+   `guard !Task.isCancelled` at the *top of the actor method* — remove it and the
+   backlog comes straight back.
+3. **Truncate passes at the end, never at the start.** highlight.js has no
+   incremental API but parses linearly, so `[0, limit)` yields exactly the colours
+   a whole-file parse gives for that prefix. Starting a chunk partway in is *not*
+   safe: a chunk beginning inside a block comment or multi-line string has no way
+   to know it, and mis-colours. `DocumentHighlighter` parses through the deepest
+   pane viewport plus a look-ahead, extends on scroll, and fills in the rest on
+   idle.
+4. **Highlight per document, not per pane.** Panes share one `NSTextStorage`, so
+   colouring it once updates all of them; the per-pane version ran N identical
+   full-document parses queued behind each other on that one actor.
+
+**Input latency and highlight latency are different problems, and fixing the
+first can worsen the second.** Rules 1–4 are about main-thread cost; typing
+*responsiveness* was never the complaint. What users actually notice is how far
+behind the caret the colouring trails, and that is governed by two things:
+
+- **The debounce is a floor on visible lag.** Keep it short (100 ms; 250 ms only
+  above 100 KB). A version that scaled it to 250/450 ms to avoid pile-ups made
+  highlighting trail two or three words behind the caret instead of one — clearly
+  worse than the whole-document code it replaced, even though it did less work.
+  Overlap is prevented structurally by `isRunning`, not by waiting longer.
+- **Never discard a completed parse just because the text moved.** A parse takes
+  ~110 ms on an 80 KB file, so at any real typing speed an edit lands before it
+  finishes. Both the original whole-document string comparison and its first
+  replacement threw the whole result away for that, which means nothing is ever
+  applied *while* typing — only in pauses long enough to fit an entire parse. An
+  edit at offset F cannot change the correct colouring before F, so
+  `DocumentHighlighter` applies the result over `[0, editFloor)` and queues a
+  follow-up for the rest.
+
+- **Typed characters inherit their token's colour** (`Coordinator`'s
+  `shouldChangeTextIn`). The editor is a plain-text `NSTextView`
+  (`isRichText = false`), so insertions take the view's text colour and stay plain
+  until a pass reaches them — every word flashed white as it was typed. Seeding
+  `typingAttributes` from the preceding character fixes it, and compounds: the
+  colour is written into the inserted character, so the next keystroke inherits
+  from that one and the rest of the word stays coloured. Restricted to *mid-word*
+  insertions on purpose — inheriting across a space or newline would render a line
+  typed under a comment in the comment colour.
+
+Note that viewport limiting (rule 3) buys nothing when the caret is at the *end*
+of a file — the prefix is then the whole document. Editing at the bottom of a
+large file is the worst case and the one to benchmark against.
+
+`DocumentHighlighterTests` pins the load-bearing behaviour, especially
+`repeatedPassOverUnchangedTextWritesNothing` and
+`editDuringAPassStillAppliesTheValidPrefix`.
 
 **Debugging opaque rendering issues:** when reading code and theorizing fails
 (as with the tab-bar line), **instrument the running app** — dump the live AppKit

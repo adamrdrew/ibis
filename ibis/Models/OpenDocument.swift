@@ -24,6 +24,15 @@ final class OpenDocument: Identifiable {
     /// so editors know to re-sync/re-highlight.
     @ObservationIgnored let storage = NSTextStorage()
 
+    /// Syntax highlighting for this document's buffer. It lives here, not on the
+    /// editor view's coordinator, because the buffer is shared across panes:
+    /// colouring it once updates every pane showing the file, where a per-pane
+    /// highlighter ran the same whole-document parse once per pane and queued
+    /// them behind each other on the single `SyntaxHighlighter` actor. Created
+    /// lazily — it watches `storage`, and there is nothing to colour until an
+    /// editor mounts.
+    @ObservationIgnored private(set) lazy var highlighter = DocumentHighlighter(storage: storage)
+
     /// Undo manager shared by every pane showing this document (so undo stays
     /// coherent across a split) but *isolated* from other documents — clearing it
     /// on a programmatic replace can't wipe another file's history the way the
