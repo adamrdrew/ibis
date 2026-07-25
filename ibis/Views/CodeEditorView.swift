@@ -13,6 +13,12 @@ struct EditorConfiguration: Equatable {
     var showInvisibles: Bool
     var lightTheme: String
     var darkTheme: String
+    /// The project's accent override (nil = the app/system accent). The caret
+    /// wears it, so a per-project accent reaches the editor too.
+    var accent: ThemeColor?
+
+    /// The caret color to apply, resolving the override against the app accent.
+    var accentNSColor: NSColor { accent?.nsColor ?? .ibisAccent }
 }
 
 /// The code editor: an `NSTextView` (TextKit 1 stack, for a line-number ruler
@@ -72,7 +78,7 @@ struct CodeEditorView: NSViewRepresentable {
         textView.isAutomaticLinkDetectionEnabled = false
         textView.textContainerInset = NSSize(width: 6, height: 8)
         textView.backgroundColor = NSColor.textBackgroundColor
-        textView.insertionPointColor = .ibisAccent
+        textView.insertionPointColor = configuration.accentNSColor
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
 
@@ -250,6 +256,7 @@ struct CodeEditorView: NSViewRepresentable {
         coordinator.softTabsEnabled = configuration.usesSoftTabs
         coordinator.tabWidth = configuration.tabWidth
         coordinator.activateHandler = onActivate
+        coordinator.accentOverride = configuration.accent
         coordinator.lastConfiguration = configuration
 
         let highlighter = document.highlighter
@@ -280,6 +287,7 @@ struct CodeEditorView: NSViewRepresentable {
         paragraph.tabStops = []
 
         textView.font = font
+        textView.insertionPointColor = configuration.accentNSColor
         textView.defaultParagraphStyle = paragraph
         textView.typingAttributes = [
             .font: font,
@@ -340,6 +348,15 @@ struct CodeEditorView: NSViewRepresentable {
             self.document = document
         }
 
+        /// This project's accent override, if it has one. Stored unresolved so
+        /// the *system* accent is re-read at apply time — caching the resolved
+        /// `NSColor` would freeze the caret at the accent in force when the
+        /// editor mounted.
+        var accentOverride: ThemeColor?
+
+        /// The caret color right now: the project's accent, else the app's.
+        var resolvedAccent: NSColor { accentOverride?.nsColor ?? .ibisAccent }
+
         /// The insertion-point color is a cached `NSColor`, so re-apply it when
         /// the user changes the system accent so the caret follows live.
         func observeAccentChanges() {
@@ -349,7 +366,8 @@ struct CodeEditorView: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.textView?.insertionPointColor = .ibisAccent
+                    guard let self else { return }
+                    self.textView?.insertionPointColor = self.resolvedAccent
                 }
             }
         }
@@ -386,7 +404,7 @@ struct CodeEditorView: NSViewRepresentable {
                 guard let self else { return }
                 let color = background?.nsColor ?? .textBackgroundColor
                 self.textView?.backgroundColor = color
-                self.textView?.insertionPointColor = .ibisAccent
+                self.textView?.insertionPointColor = self.resolvedAccent
                 self.ruler?.backgroundColor = color
                 self.ruler?.needsDisplay = true
             }

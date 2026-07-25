@@ -128,6 +128,18 @@ final class AppSettings {
         }
     }
 
+    /// The app-wide appearance every new window starts from. A project can lay
+    /// its own overrides over this (see `EffectiveAppearance.resolve`); the
+    /// accent is nil here because "no override" means the system accent.
+    var appearanceDefaults: EffectiveAppearance {
+        EffectiveAppearance(
+            editorLightTheme: lightTheme,
+            editorDarkTheme: darkTheme,
+            terminalLightTheme: terminalLightTheme,
+            terminalDarkTheme: terminalDarkTheme,
+            accent: nil)
+    }
+
     /// The shell-ready command line for the configured agent, or nil if unset.
     var agentCommandLine: String? {
         let command = agentCommand.trimmingCharacters(in: .whitespaces)

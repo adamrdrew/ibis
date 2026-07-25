@@ -36,6 +36,13 @@ struct WorkspaceView: View {
                 StatusBarView(git: workspace.git)
             }
         }
+        // Everything in this window — including its sheets, which inherit the
+        // environment — tints with the project's accent when it sets one.
+        // `.tint(nil)` (the no-override case) leaves the system accent alone;
+        // the environment value is what Ibis's own explicitly-accented chrome
+        // reads, since `Color.accentColor` doesn't follow `.tint`.
+        .environment(\.ibisAccent, appearance.accentColor)
+        .tint(appearance.accent == nil ? nil : appearance.accentColor)
         // Transient banner posted by the MCP `notify` tool.
         .overlay(alignment: .top) {
             if let banner = bridge.banner, let workspace,
@@ -542,6 +549,12 @@ struct WorkspaceView: View {
         )
     }
 
+    /// This window's themes and accent: the app-wide settings with the
+    /// project's `.ibis.json` overrides laid over them.
+    private var appearance: EffectiveAppearance {
+        workspace?.appearance ?? settings.appearanceDefaults
+    }
+
     private var editorConfiguration: EditorConfiguration {
         EditorConfiguration(
             fontName: settings.fontName,
@@ -551,8 +564,9 @@ struct WorkspaceView: View {
             wordWrap: settings.wordWrap,
             showLineNumbers: settings.showLineNumbers,
             showInvisibles: settings.showInvisibles,
-            lightTheme: settings.lightTheme,
-            darkTheme: settings.darkTheme
+            lightTheme: appearance.editorLightTheme,
+            darkTheme: appearance.editorDarkTheme,
+            accent: appearance.accent
         )
     }
 
@@ -719,10 +733,12 @@ struct WorkspaceView: View {
 private struct MCPBannerView: View {
     let text: String
 
+    @Environment(\.ibisAccent) private var accent
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(Color.ibisAccent)
+                .foregroundStyle(accent)
             Text(text)
                 .font(.callout)
                 .lineLimit(2)

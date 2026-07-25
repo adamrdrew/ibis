@@ -64,6 +64,7 @@ private struct TabItemView: View {
     var onSelect: () -> Void
     var onClose: () -> Void
 
+    @Environment(\.ibisAccent) private var accent
     @State private var isHovering = false
 
     var body: some View {
@@ -99,7 +100,7 @@ private struct TabItemView: View {
         .overlay(alignment: .bottom) {
             if isCurrent {
                 Rectangle()
-                    .fill(isPaneActive ? Color.ibisAccent : Color.secondary)
+                    .fill(isPaneActive ? accent : Color.secondary)
                     .frame(height: 2)
             }
         }

@@ -44,7 +44,9 @@ Use the Xcode MCP tools (this project is developed from inside Xcode):
   `WorkspaceRef`, `WorkspaceFileEntity` (App Intents), `TerminalDock`/
   `TerminalSession` (integrated terminal; mirror the pane/tab model),
   `GitStatusModel` (shells out to `git`), `WorkspaceStateStore` (per-root tab/pane
-  restoration snapshot in UserDefaults).
+  restoration snapshot in UserDefaults), `ProjectAppearance`/`EffectiveAppearance`
+  (a project's optional theme/accent overrides and their resolution against
+  `AppSettings`).
 - **FileSystem/** — `FileTreeLoader`, `FileSystemWatcher` (FSEvents),
   `FileOperations`, `SecurityScopedAccess`.
 - **Syntax/** — `Language` (ext → highlight.js name), `SyntaxHighlighter`
@@ -232,6 +234,26 @@ reconfigure cells in place through `enumerateAvailableRowViews` — never
 `reloadItem`, which rebuilds the row and would tear down an inline rename, and
 never just the rows in `visibleRect`, since AppKit keeps a band of live rows
 outside it that never re-run `viewFor`.
+
+**Per-project themes and accent.** The Settings window's editor/terminal themes
+are the *defaults*; a project can override any of them (and set a window accent)
+in Project Settings, stored under `"appearance"` in its `.ibis.json`. Each field
+falls through on its own — `EffectiveAppearance.resolve` lays the project's
+non-nil fields over `AppSettings.appearanceDefaults`, and `Workspace.appearance`
+is the computed result every view reads (never `settings.lightTheme` &c.
+directly, or that view silently ignores the project). Unlike `env`/`actions`,
+appearance applies **without trust**: theme names and a hex color are inert data,
+and every value degrades to "no override" if it's malformed, so a bad hand-edit
+can't make `.ibis.json` unloadable. The accent is the fiddly part, because
+`Color.ibisAccent` is a *static* and can't vary per window: `WorkspaceView`
+publishes the resolved color as `\.ibisAccent` in the environment (plus `.tint`
+for stock controls), and views inside a window read that. AppKit call sites can't
+— they cache a resolved `NSColor` — so they take the override as a value
+(`EditorConfiguration.accent` for the caret, `workspace.appearance.accentNSColor`
+in `FileOutlineView`) and **re-resolve** it on both triggers: the system's
+`systemColorsDidChangeNotification` and a `withObservationTracking` on the
+project's accent. Caching the resolved `NSColor` instead freezes the caret and
+the folder icons at whatever was in force when the view mounted.
 
 **Syntax highlighting is where typing performance lives or dies.** Four rules,
 each of which was once broken and measurably cost typing latency. Measure before

@@ -4,6 +4,8 @@ import SwiftUI
 /// toggle and results grouped by file. Clicking a result opens the file at the
 /// matching line.
 struct ProjectSearchView: View {
+    @Environment(\.ibisAccent) private var accent
+
     @Bindable var model: ProjectSearchModel
     let root: URL
     var onOpen: (URL, SearchMatch) -> Void
@@ -184,7 +186,7 @@ struct ProjectSearchView: View {
         result.foregroundColor = .secondary
 
         var emphasized = AttributedString(matchText)
-        emphasized.foregroundColor = .ibisAccent
+        emphasized.foregroundColor = accent
         emphasized.inlinePresentationIntent = .stronglyEmphasized
 
         var tail = AttributedString(suffix)

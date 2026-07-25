@@ -8,6 +8,7 @@ struct EditorPaneView: View {
     let configuration: EditorConfiguration
     var onCloseTab: (OpenDocument, EditorPane) -> Void
     @Environment(AppSettings.self) private var settings
+    @Environment(\.ibisAccent) private var accent
 
     private var isActive: Bool { layout.activePaneID == pane.id }
     private var hasMultiplePanes: Bool { layout.panes.count > 1 }
@@ -23,7 +24,7 @@ struct EditorPaneView: View {
         .overlay(alignment: .top) {
             if isActive && hasMultiplePanes {
                 Rectangle()
-                    .fill(Color.ibisAccent)
+                    .fill(accent)
                     .frame(height: 2)
             }
         }
@@ -71,7 +72,7 @@ struct EditorPaneView: View {
                     document.showsPreview.toggle()
                 } label: {
                     Image(systemName: document.showsPreview ? "eye.fill" : "eye")
-                        .foregroundStyle(document.showsPreview ? AnyShapeStyle(Color.ibisAccent) : AnyShapeStyle(.secondary))
+                        .foregroundStyle(document.showsPreview ? AnyShapeStyle(accent) : AnyShapeStyle(.secondary))
                 }
                 .buttonStyle(.plain)
                 .help(document.showsPreview ? "Show source" : "Show rendered preview")

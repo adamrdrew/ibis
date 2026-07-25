@@ -11,6 +11,7 @@ struct DiffReviewView: View {
     /// The diff viewport's width, so rows can pad their backgrounds out to at
     /// least the visible width when every line is shorter than the sheet.
     @State private var viewportWidth: CGFloat = 0
+    @Environment(\.ibisAccent) private var accent
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +28,7 @@ struct DiffReviewView: View {
     private var header: some View {
         HStack(spacing: 8) {
             Image(systemName: "sparkles")
-                .foregroundStyle(Color.ibisAccent)
+                .foregroundStyle(accent)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Proposed edit")
                     .font(.headline)
@@ -89,7 +90,7 @@ struct DiffReviewView: View {
             Button("Apply", action: onApply)
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.borderedProminent)
-                .tint(Color.ibisAccent)
+                .tint(accent)
         }
         .padding(12)
     }

@@ -46,6 +46,10 @@ private struct EditorSettingsView: View {
                     themeName: settings.darkTheme,
                     fontName: settings.fontName,
                     fontSize: settings.fontSize)
+
+                Text("Used by every project that doesn’t set its own theme. A project can override either theme in its Project Settings.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Font") {
@@ -152,7 +156,7 @@ private struct TerminalSettingsView: View {
                     fontName: settings.terminalFontName,
                     fontSize: settings.terminalFontSize)
 
-                Text("The terminal uses the light or dark theme to match the system appearance. Changes apply to open terminals immediately.")
+                Text("The terminal uses the light or dark theme to match the system appearance. Changes apply to open terminals immediately, except in projects that set their own theme in Project Settings.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

@@ -13,6 +13,7 @@ struct ProjectSettingsView: View {
     var dismiss: () -> Void
 
     @Environment(AppSettings.self) private var settings
+    @Environment(\.ibisAccent) private var accent
     @State private var mcpStatus: String?
     @State private var mcpIsError = false
     @State private var saveError: String?
@@ -28,6 +29,7 @@ struct ProjectSettingsView: View {
                 }
                 actionsSection
                 environmentSection
+                ProjectAppearanceSections(config: config)
                 agentSection
             }
             .formStyle(.grouped)
@@ -162,7 +164,7 @@ struct ProjectSettingsView: View {
     private func addButton(_ title: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Label(title, systemImage: "plus.circle.fill")
-                .foregroundStyle(Color.ibisAccent)
+                .foregroundStyle(accent)
         }
         .buttonStyle(.borderless)
     }

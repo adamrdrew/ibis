@@ -1318,6 +1318,18 @@ final class Workspace {
         ).message
     }
 
+    // MARK: - Appearance
+
+    /// What this window renders with: the app-wide themes and accent with the
+    /// project's `.ibis.json` overrides laid on top, field by field. Computed
+    /// (not cached) so both inputs stay observable — editing either one in a
+    /// settings sheet re-themes the live window.
+    var appearance: EffectiveAppearance {
+        EffectiveAppearance.resolve(
+            project: projectConfig.appearance,
+            defaults: settings?.appearanceDefaults ?? .appDefault)
+    }
+
     // MARK: - Trust
 
     /// The actions Ibis will expose/run — none until the folder is trusted.
