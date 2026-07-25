@@ -65,6 +65,16 @@ actor SyntaxHighlighter {
         fontName: String,
         fontSize: Double
     ) -> HighlightResult? {
+        // Cancellation has to be checked *here*, inside the actor, and not only
+        // on the calling `Task`. Cancelling that task cannot stop work already
+        // dispatched onto this serialized actor, so a burst of typing used to
+        // queue up whole-document passes that each ran to completion before
+        // their results were thrown away — three queued 210 KB passes measured
+        // 1,015 ms, during which every other pane and window waited its turn
+        // behind them. Bailing at the head of the queue is what makes the
+        // caller's `cancel()` real.
+        guard !Task.isCancelled else { return nil }
+
         if highlighter == nil {
             highlighter = Highlighter()
         }
@@ -82,6 +92,11 @@ actor SyntaxHighlighter {
         guard let attributed = highlighter.highlight(code, as: language, doFastRender: true) else {
             return nil
         }
+        // Deliberately *no* cancellation check here. Once the parse is paid for,
+        // the result is worth keeping: the caller applies whatever prefix of it
+        // is still valid rather than discarding it (see `DocumentHighlighter`'s
+        // `editFloor`). Only the check above, which avoids starting work at all,
+        // earns its keep.
 
         var runs: [ColorRun] = []
         let full = NSRange(location: 0, length: attributed.length)
