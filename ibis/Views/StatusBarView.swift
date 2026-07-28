@@ -5,6 +5,8 @@ import SwiftUI
 struct StatusBarView: View {
     let git: GitStatusModel
 
+    @Environment(\.ibisAccent) private var accent
+
     var body: some View {
         HStack(spacing: 10) {
             gitSection
@@ -33,7 +35,7 @@ struct StatusBarView: View {
             if info.isDirty {
                 HStack(spacing: 4) {
                     Circle()
-                        .fill(Color.ibisAccent)
+                        .fill(accent)
                         .frame(width: 6, height: 6)
                     Text("Changes")
                 }

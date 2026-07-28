@@ -14,13 +14,12 @@ struct TerminalDockView: View {
             ?? .monospacedSystemFont(ofSize: settings.terminalFontSize, weight: .regular)
     }
 
-    /// The color theme for the current appearance. Reading `colorScheme` here
-    /// means an appearance flip re-runs the session views' update pass, which
-    /// re-applies the theme to every live terminal.
+    /// The color theme for the current appearance — this project's override if
+    /// it has one, else the app-wide theme. Reading `colorScheme` here means an
+    /// appearance flip re-runs the session views' update pass, which re-applies
+    /// the theme to every live terminal.
     private var terminalTheme: TerminalTheme {
-        let isDark = colorScheme == .dark
-        let name = isDark ? settings.terminalDarkTheme : settings.terminalLightTheme
-        return TerminalThemeCatalog.theme(named: name, isDark: isDark)
+        workspace.appearance.terminalTheme(isDark: colorScheme == .dark)
     }
 
     private var shellOverride: String? {
@@ -170,6 +169,8 @@ private struct TerminalExitedOverlay: View {
     let session: TerminalSession
     let onRestart: () -> Void
 
+    @Environment(\.ibisAccent) private var accent
+
     private var statusText: String {
         if let code = session.exitCode, code != 0 {
             return "Shell exited with code \(code)."
@@ -193,7 +194,7 @@ private struct TerminalExitedOverlay: View {
                     .foregroundStyle(.secondary)
                 Button("Restart", action: onRestart)
                     .buttonStyle(.borderedProminent)
-                    .tint(Color.ibisAccent)
+                    .tint(accent)
             }
             .padding(24)
         }

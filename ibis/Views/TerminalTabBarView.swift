@@ -52,6 +52,7 @@ private struct TerminalTabItemView: View {
     var onSelect: () -> Void
     var onClose: () -> Void
 
+    @Environment(\.ibisAccent) private var accent
     @State private var isHovering = false
     @State private var isEditing = false
     @State private var editingText = ""
@@ -102,7 +103,7 @@ private struct TerminalTabItemView: View {
         .overlay(alignment: .bottom) {
             if isCurrent {
                 Rectangle()
-                    .fill(Color.ibisAccent)
+                    .fill(accent)
                     .frame(height: 2)
             }
         }

@@ -63,6 +63,7 @@ struct FileOutlineView: NSViewRepresentable {
         context.coordinator.outlineView = outlineView
         context.coordinator.installReloadBridge()
         context.coordinator.observeAccentChanges()
+        context.coordinator.observeProjectAccent()
         context.coordinator.observeGitStatus()
         outlineView.reloadData()
 
@@ -130,6 +131,22 @@ struct FileOutlineView: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated { self?.redecorateRows() }
+            }
+        }
+
+        /// Same idea for the *project's* accent override: folder icons cache a
+        /// resolved `NSColor`, so changing the accent in Project Settings has to
+        /// re-tint the rows that are already built.
+        func observeProjectAccent() {
+            guard !isTornDown else { return }
+            withObservationTracking {
+                _ = workspace.projectConfig.appearance.accent
+            } onChange: { [weak self] in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.redecorateRows()
+                    self.observeProjectAccent()
+                }
             }
         }
 
@@ -379,14 +396,14 @@ struct FileOutlineView: NSViewRepresentable {
                 cell.textField?.textColor = isIgnored ? .tertiaryLabelColor : .labelColor
             }
             cell.textField?.setAccessibilityHelp(isIgnored ? "Ignored by Git" : nil)
-            cell.imageView?.contentTintColor = Self.iconTint(for: node, isIgnored: isIgnored)
+            cell.imageView?.contentTintColor = iconTint(for: node, isIgnored: isIgnored)
         }
 
         /// Folder icons carry the accent; files sit back. An ignored row fades
         /// both, so a dimmed subtree reads as one block.
-        private static func iconTint(for node: FileNode, isIgnored: Bool) -> NSColor {
+        private func iconTint(for node: FileNode, isIgnored: Bool) -> NSColor {
             if isIgnored { return .tertiaryLabelColor }
-            return node.isDirectory ? .ibisAccent : .secondaryLabelColor
+            return node.isDirectory ? workspace.appearance.accentNSColor : .secondaryLabelColor
         }
 
         private static func color(for change: GitStatusModel.FileChange) -> NSColor {

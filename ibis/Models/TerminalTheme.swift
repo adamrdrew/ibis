@@ -58,6 +58,23 @@ struct ThemeColor: Sendable, Hashable, Decodable {
         NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
     }
 
+    /// Round-trips back to the `"#rrggbb"` form used in the catalog and in a
+    /// project's `.ibis.json` accent override.
+    var hexString: String {
+        func byte(_ value: Double) -> Int { Int((max(0, min(1, value)) * 255).rounded()) }
+        return String(format: "#%02x%02x%02x", byte(red), byte(green), byte(blue))
+    }
+
+    /// Builds a theme color from any `NSColor` (e.g. the Project Settings color
+    /// well), converting into sRGB first so a display-P3 pick still stores
+    /// sensible components.
+    init(nsColor: NSColor) {
+        let srgb = nsColor.usingColorSpace(.sRGB) ?? nsColor
+        red = Double(srgb.redComponent)
+        green = Double(srgb.greenComponent)
+        blue = Double(srgb.blueComponent)
+    }
+
     /// SwiftTerm's palette `Color` (0...65535 per channel). Uses the public
     /// 16-bit initializer since the 8-bit one is module-internal.
     var swiftTermColor: SwiftTerm.Color {

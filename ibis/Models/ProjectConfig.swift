@@ -32,6 +32,10 @@ final class ProjectConfig {
 
     var actions: [Action] = []
     var envVars: [EnvVar] = []
+    /// This project's optional theme/accent overrides. Inert data (theme names
+    /// and a color), so unlike `env`/`actions` it applies without trust — a
+    /// hostile `.ibis.json` can recolor a window, not run anything.
+    var appearance = ProjectAppearance.none
 
     /// Set when `.ibis.json` exists but couldn't be parsed. In that state we must
     /// not treat the config as empty or a Save would overwrite the user's real
@@ -112,6 +116,7 @@ final class ProjectConfig {
             // File absent → an empty config is the correct state.
             actions = []
             envVars = []
+            appearance = .none
             rawObject = [:]
             loadError = nil
             return
@@ -133,6 +138,11 @@ final class ProjectConfig {
         envVars = (file.env ?? [:])
             .sorted { $0.key < $1.key }
             .map { EnvVar(key: $0.key, value: $0.value) }
+        // Read from the raw object rather than a Codable member: a bad theme
+        // name or hex string must degrade to "no override", never make the
+        // whole file unparseable (which would block Save entirely).
+        appearance = ProjectAppearance(
+            json: rawObject[ProjectAppearance.Key.section] as? [String: Any])
     }
 
     enum SaveError: LocalizedError {
@@ -156,6 +166,11 @@ final class ProjectConfig {
             object.removeValue(forKey: "actions")
         } else {
             object["actions"] = runnable.map { ["name": $0.name, "command": $0.command] }
+        }
+        if let appearanceObject = appearance.jsonObject {
+            object[ProjectAppearance.Key.section] = appearanceObject
+        } else {
+            object.removeValue(forKey: ProjectAppearance.Key.section)
         }
 
         let data = try JSONSerialization.data(
