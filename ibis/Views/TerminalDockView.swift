@@ -53,7 +53,7 @@ struct TerminalDockView: View {
         HStack(spacing: 4) {
             // Tabs take the leftover width and scroll; the controls are pinned so
             // they never clip when the dock is narrow.
-            TerminalTabBarView(dock: dock)
+            TerminalTabBarView(dock: dock, onClose: { workspace.requestCloseTerminalSession($0) })
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(0)
 

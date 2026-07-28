@@ -68,34 +68,44 @@ private struct TabItemView: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Close / dirty indicator lives on the leading edge (the macOS
-            // convention) in a fixed-width slot that's always present, so the
-            // tab's width never changes as the close control appears on hover.
-            leading
-                .frame(width: 14, height: 14)
+        // The *whole* tab is the select button — icon, name, and the padding
+        // around them — so a click anywhere activates it. It used to wrap only
+        // the icon+label, which left the padding and the close slot dead: clicks
+        // landed a few points off the text and did nothing, and the tab read as
+        // unresponsive. It stays a real Button (not a tap gesture) so it's
+        // reachable by Full Keyboard Access and VoiceOver.
+        Button(action: onSelect) {
+            HStack(spacing: 6) {
+                // Reserves the close/dirty control's slot on the leading edge
+                // (the macOS convention) so the tab's width never changes as
+                // that control appears on hover. The control itself is drawn by
+                // the overlay below, on top of this button.
+                Color.clear
+                    .frame(width: TabMetrics.slot, height: TabMetrics.slot)
 
-            // The selectable region is a real Button so it's reachable by Full
-            // Keyboard Access and activatable by VoiceOver (a bare tap gesture is
-            // invisible to both). The close control stays a sibling button.
-            Button(action: onSelect) {
-                HStack(spacing: 6) {
-                    Image(systemName: document.url.map { FileIconProvider.symbolName(forFileURL: $0) } ?? "doc")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                Image(systemName: document.url.map { FileIconProvider.symbolName(forFileURL: $0) } ?? "doc")
+                    .foregroundStyle(.secondary)
+                    .font(.caption)
 
-                    Text(document.name)
-                        .lineLimit(1)
-                        .font(.callout)
-                }
-                .contentShape(Rectangle())
+                Text(document.name)
+                    .lineLimit(1)
+                    .font(.callout)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(document.name + (document.isDirty ? ", edited" : ""))
-            .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .buttonStyle(.plain)
+        .accessibilityLabel(document.name + (document.isDirty ? ", edited" : ""))
+        .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+        // The close control sits in an overlay rather than in the layout so its
+        // hit box can be comfortably larger than the glyph without widening the
+        // tab: the bare `Image` was clickable only on its own drawn pixels.
+        .overlay(alignment: .leading) {
+            leading
+                .frame(width: TabMetrics.hit, height: TabMetrics.hit)
+                .padding(.leading, TabMetrics.hitLeadingInset)
+        }
         .background(isCurrent ? AnyShapeStyle(.selection.opacity(isPaneActive ? 0.30 : 0.18)) : AnyShapeStyle(.clear))
         .overlay(alignment: .bottom) {
             if isCurrent {
@@ -141,23 +151,68 @@ private struct TabItemView: View {
     @ViewBuilder
     private var leading: some View {
         if document.isDirty && !isHovering {
+            // Indicators, unlike the close button, must stay transparent to
+            // clicks — they sit on top of the select button, and a hit-testable
+            // dot would punch a dead spot back into the tab.
             Circle()
                 .fill(.secondary)
                 .frame(width: 7, height: 7)
+                .allowsHitTesting(false)
         } else if isHovering || isCurrent {
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Close Tab")
-            .help("Close Tab")
+            TabCloseButton(label: "Close Tab", action: onClose)
         } else {
-            // Empty placeholder keeps the slot's width reserved so idle tabs
-            // are the same size as hovered/active ones.
             Color.clear
+                .allowsHitTesting(false)
         }
+    }
+}
+
+/// Shared geometry for both tab strips' leading close control.
+enum TabMetrics {
+    /// The width reserved in the tab's layout for the close/dirty control.
+    static let slot: CGFloat = 14
+    /// The control's actual click target, drawn in an overlay so growing it
+    /// doesn't change the tab's size.
+    static let hit: CGFloat = 22
+    /// Leading inset that centers the `hit` box over the reserved `slot`,
+    /// given the tab's 10pt horizontal padding.
+    static let hitLeadingInset: CGFloat = 10 - (hit - slot) / 2
+    /// Diameter of the hover ring around the ✕.
+    static let ring: CGFloat = 16
+}
+
+/// The tab close control: an ✕ that draws a subtle ring while the pointer is
+/// over it, so the (deliberately generous) click target is discoverable —
+/// Safari's affordance. Both the ring and the hit area are laid out inside the
+/// overlay slot the tab reserves for this control, so neither can resize the tab
+/// or reflow its title.
+struct TabCloseButton: View {
+    var label: String
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: TabMetrics.ring, height: TabMetrics.ring)
+                .background {
+                    Circle()
+                        .strokeBorder(.secondary.opacity(0.45), lineWidth: 1)
+                        .opacity(isHovering ? 1 : 0)
+                }
+                // Expands past the ring to fill the slot, so clicks near the ✕
+                // still close: the bare glyph was hit-testable only on its own
+                // drawn pixels.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel(label)
+        .help(label)
     }
 }
 
