@@ -20,6 +20,9 @@ private struct TerminalTabTransfer: Codable, Transferable {
 /// `TabBarView`: click to activate, kelly underline on the active tab.
 struct TerminalTabBarView: View {
     @Bindable var dock: TerminalDock
+    /// Routed through the workspace rather than straight to `dock.closeSession`,
+    /// so closing a tab that's running something can confirm first.
+    var onClose: (TerminalSession.ID) -> Void
 
     var body: some View {
         ScrollView(.horizontal) {
@@ -29,7 +32,7 @@ struct TerminalTabBarView: View {
                         session: session,
                         isCurrent: dock.activeSessionID == session.id,
                         onSelect: { dock.activeSessionID = session.id },
-                        onClose: { dock.closeSession(session.id) }
+                        onClose: { onClose(session.id) }
                     )
                     .draggable(TerminalTabTransfer(id: session.id))
                     .dropDestination(for: TerminalTabTransfer.self) { items, _ in
@@ -59,18 +62,39 @@ private struct TerminalTabItemView: View {
     @FocusState private var fieldFocused: Bool
 
     var body: some View {
-        HStack(spacing: 6) {
-            // Close control on the leading edge (macOS convention) in a
-            // fixed-width slot that's always present, so tab widths never shift
-            // when the close button appears on hover.
-            leading
-                .frame(width: 14, height: 14)
+        tabContent
+            // The close control sits in an overlay rather than in the layout so
+            // its hit box can be comfortably larger than the glyph without
+            // widening the tab: the bare `Image` was clickable only on its own
+            // drawn pixels.
+            .overlay(alignment: .leading) {
+                leading
+                    .frame(width: TabMetrics.hit, height: TabMetrics.hit)
+                    .padding(.leading, TabMetrics.hitLeadingInset)
+            }
+            .background(isCurrent ? AnyShapeStyle(.selection.opacity(0.30)) : AnyShapeStyle(.clear))
+            .overlay(alignment: .bottom) {
+                if isCurrent {
+                    Rectangle()
+                        .fill(accent)
+                        .frame(height: 2)
+                }
+            }
+            .onHover { isHovering = $0 }
+            .contextMenu {
+                Button("Rename", action: beginRename)
+                if session.hasManualName {
+                    Button("Clear Custom Name", action: session.clearManualName)
+                }
+                Divider()
+                Button("Close", action: onClose)
+            }
+    }
 
-            Image(systemName: "terminal")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-
-            if isEditing {
+    @ViewBuilder
+    private var tabContent: some View {
+        if isEditing {
+            row {
                 TextField("Name", text: $editingText)
                     .textFieldStyle(.plain)
                     .font(.callout)
@@ -82,40 +106,53 @@ private struct TerminalTabItemView: View {
                         // Commit on blur (click elsewhere), matching Terminal.app.
                         if !focused && isEditing { commitRename() }
                     }
-            } else {
-                Text(session.title)
-                    .lineLimit(1)
-                    .font(.callout)
-                    .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                    .contentShape(Rectangle())
-                    // Double-click renames; single click still selects. The
-                    // count-2 gesture is registered first so SwiftUI can
-                    // disambiguate it from the select tap.
-                    .onTapGesture(count: 2, perform: beginRename)
-                    .onTapGesture(perform: onSelect)
-                    .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
-                    .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
             }
+        } else {
+            // The *whole* tab is the select button — icon, title, and the padding
+            // around them — so a click anywhere activates it, and it's reachable
+            // by Full Keyboard Access and VoiceOver.
+            Button(action: onSelect) {
+                row {
+                    Text(session.title)
+                        .lineLimit(1)
+                        .font(.callout)
+                        .foregroundStyle(session.isRunning ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            // Double-click still renames, but as a *simultaneous* gesture. It
+            // used to be a count-2 `onTapGesture` stacked on a count-1 one,
+            // which makes SwiftUI hold the single tap until the system
+            // double-click interval elapses — that wait, not any terminal work,
+            // was the ~1s pause before a clicked terminal tab came into focus.
+            // Simultaneous recognition lets the button fire on the first
+            // mouse-up while the second click still starts the rename.
+            .simultaneousGesture(TapGesture(count: 2).onEnded { beginRename() })
+            .accessibilityLabel(session.title + (session.isRunning ? "" : ", exited"))
+            .accessibilityAddTraits(isCurrent ? [.isSelected] : [])
+        }
+    }
+
+    /// The tab's contents: the reserved close-control slot, the terminal icon,
+    /// and whatever names the tab. The padding lives inside so that it, too, is
+    /// part of the select button's hit area.
+    private func row<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            // Reserves the close control's slot on the leading edge (macOS
+            // convention) so tab widths never shift when it appears on hover;
+            // the control itself is drawn by the overlay in `body`.
+            Color.clear
+                .frame(width: TabMetrics.slot, height: TabMetrics.slot)
+
+            Image(systemName: "terminal")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+
+            content()
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(isCurrent ? AnyShapeStyle(.selection.opacity(0.30)) : AnyShapeStyle(.clear))
-        .overlay(alignment: .bottom) {
-            if isCurrent {
-                Rectangle()
-                    .fill(accent)
-                    .frame(height: 2)
-            }
-        }
-        .onHover { isHovering = $0 }
-        .contextMenu {
-            Button("Rename", action: beginRename)
-            if session.hasManualName {
-                Button("Clear Custom Name", action: session.clearManualName)
-            }
-            Divider()
-            Button("Close", action: onClose)
-        }
     }
 
     private func beginRename() {
@@ -136,18 +173,12 @@ private struct TerminalTabItemView: View {
     @ViewBuilder
     private var leading: some View {
         if isHovering || isCurrent {
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Close Terminal")
-            .help("Close Terminal")
+            TabCloseButton(label: "Close Terminal", action: onClose)
         } else {
-            // Empty placeholder keeps the slot's width reserved so idle tabs
-            // match hovered/active ones.
+            // Transparent to clicks: it sits on top of the select button, and a
+            // hit-testable placeholder would punch a dead spot into the tab.
             Color.clear
+                .allowsHitTesting(false)
         }
     }
 }

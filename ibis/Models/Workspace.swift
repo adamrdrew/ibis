@@ -1404,7 +1404,37 @@ final class Workspace {
 
     func closeActiveTerminalTab() {
         guard let id = terminal.activeSessionID else { return }
-        terminal.closeSession(id)
+        requestCloseTerminalSession(id)
+    }
+
+    /// Closes a terminal tab, confirming first if a program is running in it.
+    /// An idle shell closes silently; a tab with a live foreground job (or a
+    /// running agent/action) asks before killing it — matching Terminal.app and
+    /// iTerm. See `TerminalSession.runningProgram` for how "busy" is decided.
+    func requestCloseTerminalSession(_ id: TerminalSession.ID) {
+        guard let session = terminal.sessions.first(where: { $0.id == id }) else { return }
+        guard let job = session.runningProgram else {
+            terminal.closeSession(id)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = job.name.map { "Do you want to terminate “\($0)”?" }
+            ?? "Do you want to terminate the running process?"
+        alert.informativeText = "Closing this terminal will stop what’s running in it."
+        alert.addButton(withTitle: "Terminate")
+        // AppKit gives a button titled "Cancel" the Escape key automatically.
+        alert.addButton(withTitle: "Cancel")
+
+        guard let window else {
+            if alert.runModal() == .alertFirstButtonReturn { terminal.closeSession(id) }
+            return
+        }
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.terminal.closeSession(id)
+        }
     }
 
     func selectAdjacentTerminal(offset: Int) {

@@ -399,6 +399,33 @@ final class TerminalSession: Identifiable, LocalProcessTerminalViewDelegate {
         recomputeTitle()
     }
 
+    /// The program closing this tab would terminate, or nil when there's nothing
+    /// running but an idle shell sitting at its prompt. Drives the close
+    /// confirmation, the way Terminal.app and iTerm gate theirs.
+    ///
+    /// Plain shells ask the tty which process group is in the foreground (see
+    /// `TerminalProcessInfo.foregroundJob`). Command tabs — agents and project
+    /// actions — can't use that test: they're launched as `shell -l -c "…"`, and
+    /// a shell given a single command *execs* it in place, so the program
+    /// inherits the shell's own pid and process group and looks like an idle
+    /// shell to the foreground check. Such a tab exists solely to run that
+    /// command, so while it's running, that command is by definition what
+    /// closing the tab would kill; `foregroundName` then names it (it falls back
+    /// to the tab's own pid, which is the exec'd program).
+    var runningProgram: TerminalProcessInfo.ForegroundJob? {
+        guard isRunning, let process = terminalView?.process else { return nil }
+        let fd = process.childfd
+        let pid = process.shellPid
+        guard fd >= 0, pid > 0 else { return nil }
+        guard command != nil else {
+            return TerminalProcessInfo.foregroundJob(childfd: fd, shellPid: pid)
+        }
+        return TerminalProcessInfo.ForegroundJob(
+            pid: pid,
+            name: TerminalProcessInfo.foregroundName(childfd: fd, shellPid: pid)
+        )
+    }
+
     /// A filesystem URL as a home-abbreviated path (`~/Development/ibis`).
     private static func abbreviatePath(_ url: URL) -> String {
         (url.path(percentEncoded: false) as NSString).abbreviatingWithTildeInPath

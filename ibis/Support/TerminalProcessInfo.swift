@@ -18,6 +18,39 @@ enum TerminalProcessInfo {
         return executableName(pid: pid) ?? (pid != shellPid ? executableName(pid: shellPid) : nil)
     }
 
+    /// A program running in the foreground of a terminal — what closing that tab
+    /// would kill.
+    struct ForegroundJob: Sendable, Equatable {
+        let pid: pid_t
+        /// The executable's basename, when the kernel would tell us.
+        let name: String?
+    }
+
+    /// The foreground job on the tty behind `childfd`, or nil when the shell
+    /// itself owns the terminal — i.e. it's sitting at its prompt.
+    ///
+    /// This is the signal terminal emulators use to decide whether closing a tab
+    /// needs confirmation, and it needs no list of "interesting" program names.
+    /// The kernel tracks one *foreground process group* per tty: a shell at its
+    /// prompt is that group, and the instant it runs a command, the command's
+    /// group takes the tty over while the shell blocks in `waitpid`. So a
+    /// foreground group that isn't the shell's own group means a program is
+    /// running, whatever it happens to be. It also gets the subtle cases right
+    /// for free — a job backgrounded with `&` never owns the tty, so it
+    /// correctly doesn't count, and neither does a suspended one.
+    nonisolated static func foregroundJob(childfd: Int32, shellPid: pid_t) -> ForegroundJob? {
+        guard childfd >= 0, shellPid > 0 else { return nil }
+        let foreground = tcgetpgrp(childfd)
+        // Compare against the shell's process *group*, not its pid: the group is
+        // what owns the tty. (They're equal for a shell started on its own pty,
+        // which leads its group — but reading the group says what we mean.)
+        let shellGroup = getpgid(shellPid)
+        guard foreground > 0, shellGroup > 0, foreground != shellGroup else { return nil }
+        // A process group's id is the pid of its leader — the job's first
+        // process — so this names the program the user actually started.
+        return ForegroundJob(pid: foreground, name: executableName(pid: foreground))
+    }
+
     /// The current working directory of the process `pid`, read from its vnode
     /// info. For a shell this tracks `cd`; for a running program it's that
     /// program's cwd (usually the same directory).
