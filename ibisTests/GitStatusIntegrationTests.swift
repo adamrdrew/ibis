@@ -73,6 +73,33 @@ import Foundation
         }
     }
 
+    @Test func backgroundStatusDoesNotRefreshTheIndex() async throws {
+        try await TestSupport.withTempDir { dir in
+            try git(["init", "-b", "main"], in: dir)
+            let file = dir.appending(path: "f.txt")
+            try "unchanged".write(to: file, atomically: true, encoding: .utf8)
+            try git(["add", "."], in: dir)
+            try git(["commit", "-m", "initial"], in: dir)
+
+            let index = dir.appending(path: ".git/index")
+            let indexBefore = try Data(contentsOf: index)
+
+            // Make the cached stat data stale without changing file contents.
+            // A normal `git status` refreshes and rewrites the index here,
+            // taking index.lock on the way; an optional-lock-free status must
+            // leave the index byte-for-byte untouched.
+            try FileManager.default.setAttributes(
+                [.modificationDate: Date(timeIntervalSinceNow: 5)],
+                ofItemAtPath: file.path(percentEncoded: false)
+            )
+
+            let model = GitStatusModel(root: dir)
+            let settled = await refreshAndWait(model) { $0.isRepository }
+            #expect(settled)
+            #expect(try Data(contentsOf: index) == indexBefore)
+        }
+    }
+
     @Test func detachedHeadIsReported() async throws {
         try await TestSupport.withTempDir { dir in
             try git(["init", "-b", "main"], in: dir)

@@ -171,6 +171,11 @@ final class GitStatusModel {
     private(set) var info = Info()
     let root: URL
     private var task: Task<Void, Never>?
+    /// FSEvents can arrive much faster than a Git probe completes. Task
+    /// cancellation does not stop work already dispatched to the blocking GCD
+    /// queue, so remember one follow-up instead of launching overlapping Git
+    /// processes for every event in the burst.
+    private var refreshRequestedWhileRunning = false
 
     /// When the ignore set was last computed, so it can be refreshed on a slow
     /// cadence (see ``ignoreProbeInterval``).
@@ -189,7 +194,8 @@ final class GitStatusModel {
         self.root = root
     }
 
-    /// Recomputes Git status off the main actor, cancelling any in-flight refresh.
+    /// Recomputes Git status off the main actor, coalescing requests that arrive
+    /// while a probe is already in flight.
     ///
     /// The probe runs on a GCD queue, NOT `Task.detached`: `runStatus` blocks
     /// (`waitUntilExit`, pipe drains), and blocking a *cooperative-pool* thread
@@ -198,14 +204,17 @@ final class GitStatusModel {
     /// runtime (no test task could ever be scheduled again). GCD global-queue
     /// threads may block; the pool over-subscribes.
     func refresh() {
-        task?.cancel()
+        guard task == nil else {
+            refreshRequestedWhileRunning = true
+            return
+        }
         let root = self.root
         let now = ContinuousClock.now
         let includeIgnored = lastIgnoreProbe.map { now - $0 >= Self.ignoreProbeInterval } ?? true
         // Carried across cheap refreshes so dimmed rows don't blink back to
         // normal between ignore probes.
         let knownIgnored = (paths: info.ignoredPaths, directories: info.ignoredDirectories)
-        task = Task {
+        task = Task { [weak self] in
             let info = await withCheckedContinuation { continuation in
                 DispatchQueue.global(qos: .utility).async {
                     continuation.resume(
@@ -213,18 +222,25 @@ final class GitStatusModel {
                     )
                 }
             }
-            if Task.isCancelled { return }
-            // A nil result means the probe was killed by the watchdog (indeterminate),
-            // not that the folder stopped being a repo — keep the last-known status
-            // rather than flashing "not a git repository" in the status bar.
-            guard var info else { return }
-            if includeIgnored {
-                lastIgnoreProbe = now
-            } else if info.isRepository {
-                info.ignoredPaths = knownIgnored.paths
-                info.ignoredDirectories = knownIgnored.directories
+            guard let self else { return }
+            // A nil result means the probe was killed by the watchdog
+            // (indeterminate), not that the folder stopped being a repo — keep
+            // the last-known status rather than flashing "not a git repository".
+            if var info {
+                if includeIgnored {
+                    self.lastIgnoreProbe = now
+                } else if info.isRepository {
+                    info.ignoredPaths = knownIgnored.paths
+                    info.ignoredDirectories = knownIgnored.directories
+                }
+                self.info = info
             }
-            self.info = info
+
+            self.task = nil
+            if self.refreshRequestedWhileRunning {
+                self.refreshRequestedWhileRunning = false
+                self.refresh()
+            }
         }
     }
 
@@ -265,6 +281,11 @@ final class GitStatusModel {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         process.arguments = [
+            // This is a background read. Without this flag `git status` may
+            // refresh the index's stat cache, creating `.git/index.lock`. The
+            // lock both interferes with real Git work and feeds another event
+            // into our watcher, which used to start still more status probes.
+            "--no-optional-locks",
             // Neutralize repo-controlled config that lets `git status` execute a
             // command: opening an untrusted repo (e.g. an extracted archive with
             // a hostile `.git/config`) must not run its `core.fsmonitor` hook.

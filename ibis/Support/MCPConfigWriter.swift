@@ -284,7 +284,13 @@ nonisolated enum MCPConfigWriter {
     private static func isGitTracked(_ relative: String, root: URL) -> Bool {
         let process = Process()
         process.executableURL = URL(filePath: "/usr/bin/env")
-        process.arguments = ["git", "-C", root.path(percentEncoded: false), "ls-files", "--error-unmatch", relative]
+        // This is only a read. Never let a background safety check contend with
+        // the user's Git operation for an optional repository lock.
+        process.arguments = [
+            "git", "--no-optional-locks",
+            "-C", root.path(percentEncoded: false),
+            "ls-files", "--error-unmatch", relative,
+        ]
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         do { try process.run() } catch { return false }
