@@ -1,0 +1,3 @@
+[mcp_servers.ibis]
+url = "http://127.0.0.1:49517/mcp"
+bearer_token_env_var = "IBIS_MCP_TOKEN"
