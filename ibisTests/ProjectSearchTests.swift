@@ -64,9 +64,6 @@ import Foundation
 
     @Test func wholeWordMatchesQueriesWithNonWordEdges() throws {
         try TestSupport.withTempDir { dir in
-            // One candidate per line (only the first match per line is
-            // reported). `\b` beside a non-word character can never match, so
-            // these queries used to return zero results.
             try write("let x = foo() + 1\ncall myfoo() now\n$state here\nrecount -count count", to: dir.appending(path: "a.txt"))
 
             let foo = search(root: dir, query: "foo()", wholeWord: true).files.first?.matches
@@ -79,6 +76,24 @@ import Foundation
             let count = search(root: dir, query: "-count", wholeWord: true).files.first?.matches
             #expect(count?.count == 1)
             #expect(count?.first?.matchColumnRange.location == 8)
+        }
+    }
+
+    @Test func reportsEveryOccurrenceOnALine() throws {
+        try TestSupport.withTempDir { dir in
+            try write("needle needle needle", to: dir.appending(path: "a.txt"))
+            let matches = try #require(search(root: dir, query: "needle").files.first?.matches)
+            #expect(matches.map(\.matchColumnRange.location) == [0, 7, 14])
+        }
+    }
+
+    @Test func capsMatchesInsideASingleFile() throws {
+        try TestSupport.withTempDir { dir in
+            try write(Array(repeating: "x", count: 6_000).joined(separator: "\n"),
+                      to: dir.appending(path: "many.txt"))
+            let results = search(root: dir, query: "x")
+            #expect(results.files.first?.matches.count == 5_000)
+            #expect(results.summary.hitMatchLimit)
         }
     }
 

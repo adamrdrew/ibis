@@ -124,7 +124,7 @@ nonisolated class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceProvidi
 /// list simply pick it up on their next session. `@MCPServer` emits its
 /// listing/dispatch members as plain overridable class members, which makes a
 /// subclass the one seam for gating a declared tool at runtime.
-nonisolated final class GatedIbisMCPServer: IbisMCPServer {
+nonisolated final class GatedIbisMCPServer: IbisMCPServer, @unchecked Sendable {
     private static let reviewToolNames: Set<String> = ["propose_edit", "propose_patch"]
 
     override var mcpToolMetadata: [MCPToolMetadata] {

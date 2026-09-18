@@ -65,7 +65,7 @@ nonisolated enum ProjectSearch {
         caseSensitive: Bool,
         useRegex: Bool,
         wholeWord: Bool,
-        isCancelled: @Sendable () -> Bool
+        isCancelled: @escaping @Sendable () -> Bool
     ) -> SearchResults {
         guard !query.isEmpty else { return SearchResults() }
 
@@ -80,9 +80,13 @@ nonisolated enum ProjectSearch {
 
         let rootIsDirectory = (try? root.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
         if !rootIsDirectory {
-            let matches = fileMatches(at: root, matcher: matcher)
-            summary.scannedFiles = matches == nil ? 0 : 1
-            let files = (matches?.isEmpty == false) ? [SearchFileResult(url: root, matches: matches!)] : []
+            let result = fileMatches(
+                at: root, matcher: matcher, limit: maxMatches, isCancelled: isCancelled
+            )
+            summary.scannedFiles = result == nil ? 0 : 1
+            summary.hitMatchLimit = result?.hitLimit ?? false
+            let files = (result?.matches.isEmpty == false)
+                ? [SearchFileResult(url: root, matches: result!.matches)] : []
             return SearchResults(files: files, summary: summary)
         }
 
@@ -120,14 +124,22 @@ nonisolated enum ProjectSearch {
                 continue
             }
 
-            guard let matches = fileMatches(at: url, matcher: matcher) else { continue }
+            let remaining = maxMatches - totalMatches
+            guard remaining > 0 else { summary.hitMatchLimit = true; break }
+            guard let fileResult = fileMatches(
+                at: url, matcher: matcher, limit: remaining, isCancelled: isCancelled
+            ) else { continue }
             summary.scannedFiles += 1
+            let matches = fileResult.matches
             guard !matches.isEmpty else { continue }
 
             results.append(SearchFileResult(url: url, matches: matches))
             totalMatches += matches.count
             if results.count >= maxFiles { summary.hitFileLimit = true; break }
-            if totalMatches >= maxMatches { summary.hitMatchLimit = true; break }
+            if fileResult.hitLimit || totalMatches >= maxMatches {
+                summary.hitMatchLimit = true
+                break
+            }
         }
 
         return SearchResults(files: results, summary: summary)
@@ -207,20 +219,36 @@ nonisolated enum ProjectSearch {
     /// Returns the matches in a file, or `nil` if it's unreadable or binary
     /// (NUL byte in the first 8 KB). Reads only an 8 KB prefix for the binary
     /// check before reading the whole file.
-    private static func fileMatches(at url: URL, matcher: Matcher) -> [SearchMatch]? {
+    private static func fileMatches(
+        at url: URL,
+        matcher: Matcher,
+        limit: Int,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) -> (matches: [SearchMatch], hitLimit: Bool)? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         let prefix = (try? handle.read(upToCount: 8192)) ?? Data()
         try? handle.close()
         if prefix.contains(0) { return nil }
 
         guard let data = try? Data(contentsOf: url) else { return nil }
-        return matches(in: String(decoding: data, as: UTF8.self), matcher: matcher)
+        return matches(
+            in: String(decoding: data, as: UTF8.self),
+            matcher: matcher,
+            limit: limit,
+            isCancelled: isCancelled
+        )
     }
 
-    private static func matches(in content: String, matcher: Matcher) -> [SearchMatch] {
+    private static func matches(
+        in content: String,
+        matcher: Matcher,
+        limit: Int,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) -> (matches: [SearchMatch], hitLimit: Bool) {
         let fullString = content as NSString
         var found: [SearchMatch] = []
         var lineNumber = 0
+        var hitLimit = false
 
         fullString.enumerateSubstrings(
             in: NSRange(location: 0, length: fullString.length),
@@ -229,37 +257,69 @@ nonisolated enum ProjectSearch {
             lineNumber += 1
             // Cancellation can't interrupt a blocked syscall, but it can abandon a
             // huge file promptly (search runs inside a cancellable Task).
-            if lineNumber % 512 == 0, Task.isCancelled { stop.pointee = true; return }
+            if lineNumber % 512 == 0, isCancelled() || Task.isCancelled {
+                stop.pointee = true
+                return
+            }
             guard let line else { return }
             let lineString = line as NSString
-            let columnRange: NSRange
+
+            func append(_ columnRange: NSRange) -> Bool {
+                guard found.count < limit else {
+                    hitLimit = true
+                    stop.pointee = true
+                    return false
+                }
+                let absolute = NSRange(
+                    location: lineRange.location + columnRange.location,
+                    length: columnRange.length
+                )
+                found.append(
+                    SearchMatch(
+                        lineNumber: lineNumber,
+                        lineText: line,
+                        matchColumnRange: columnRange,
+                        characterRange: absolute
+                    )
+                )
+                if found.count == limit {
+                    hitLimit = true
+                    stop.pointee = true
+                    return false
+                }
+                return true
+            }
+
             switch matcher {
             case .substring(let query, let options):
-                columnRange = lineString.range(of: query, options: options)
+                var location = 0
+                while location < lineString.length {
+                    let range = lineString.range(
+                        of: query,
+                        options: options,
+                        range: NSRange(location: location, length: lineString.length - location)
+                    )
+                    guard range.location != NSNotFound, range.length > 0 else { break }
+                    guard append(range) else { break }
+                    location = NSMaxRange(range)
+                }
             case .regex(let regex):
                 // Skip pathologically long lines to bound regex backtracking.
                 guard lineString.length <= maxRegexLineLength else { return }
-                columnRange = regex.firstMatch(
+                regex.enumerateMatches(
                     in: line,
                     range: NSRange(location: 0, length: lineString.length)
-                )?.range ?? NSRange(location: NSNotFound, length: 0)
+                ) { result, _, regexStop in
+                    guard let range = result?.range,
+                          range.location != NSNotFound, range.length > 0,
+                          append(range) else {
+                        if hitLimit { regexStop.pointee = true }
+                        return
+                    }
+                }
             }
-            guard columnRange.location != NSNotFound, columnRange.length > 0 else { return }
-
-            let absolute = NSRange(
-                location: lineRange.location + columnRange.location,
-                length: columnRange.length
-            )
-            found.append(
-                SearchMatch(
-                    lineNumber: lineNumber,
-                    lineText: line,
-                    matchColumnRange: columnRange,
-                    characterRange: absolute
-                )
-            )
         }
 
-        return found
+        return (found, hitLimit)
     }
 }

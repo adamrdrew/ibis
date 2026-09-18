@@ -133,11 +133,22 @@ struct WorkspaceView: View {
 
     private var navigationRoot: some View {
         NavigationSplitView {
-            sidebar
+            WorkspaceSidebar(
+                workspace: workspace,
+                selection: $selection,
+                mode: $sidebarMode,
+                searchModel: searchModel,
+                onOpenSearchResult: openSearchResult
+            )
                 .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 520)
                 .navigationTitle(workspace?.displayName ?? "Ibis")
         } detail: {
-            detail
+            WorkspaceDetail(
+                workspace: workspace,
+                settings: settings,
+                configuration: editorConfiguration,
+                terminalDragBase: $terminalDragBase
+            )
         }
         // NOTE: a customizable `.toolbar(id:)` crashes here — inside a
         // NavigationSplitView, SwiftUI inserts its automatic sidebar-toggle item
@@ -145,102 +156,15 @@ struct WorkspaceView: View {
         // So this stays a plain, non-customizable ToolbarItemGroup.
         // (Toolbar content lives in its own builder property — inlining it made
         // this whole expression exceed the type-checker's time limit.)
-        .toolbar { toolbarContent }
-    }
-
-    @ToolbarContentBuilder
-    private var toolbarContent: some ToolbarContent {
-            // Project action runner — shown only when actions are configured.
-            // (The condition lives at the toolbar-content level, not inside a
-            // ToolbarItemGroup, where SwiftUI handles `if` unreliably.)
-            if let workspace, !workspace.availableActions.isEmpty {
-                ToolbarItemGroup(placement: .navigation) {
-                    Picker("Action", selection: $selectedActionName) {
-                        ForEach(workspace.availableActions) { action in
-                            Text(action.name).tag(Optional(action.name))
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(minWidth: 90)
-                    // Can't switch actions while one is running.
-                    .disabled(workspace.terminal.isActionRunning)
-
-                    // One button with conditional content (not a structural
-                    // if/else, which SwiftUI handles unreliably in a toolbar
-                    // group): Run when idle, Stop while an action is running.
-                    Button {
-                        if workspace.terminal.isActionRunning {
-                            workspace.stopProjectAction()
-                        } else {
-                            runSelectedAction()
-                        }
-                    } label: {
-                        Label(
-                            workspace.terminal.isActionRunning ? "Stop Action" : "Run Action",
-                            systemImage: workspace.terminal.isActionRunning ? "stop.fill" : "play.fill"
-                        )
-                    }
-                    .tint(workspace.terminal.isActionRunning ? .red : nil)
-                    // Surface the exact command that will run, so a project-supplied
-                    // "Build" action can't hide something like `curl … | sh`.
-                    .help(workspace.terminal.isActionRunning
-                          ? "Stop the running action"
-                          : "Run: \(selectedActionCommand(workspace))")
-                }
-            }
-
-            // Project Settings — always available (to add actions / env).
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    workspace?.projectConfig.load()
-                    workspace?.projectSettingsRequested = true
-                } label: {
-                    Label("Project Settings", systemImage: "slider.horizontal.3")
-                }
-                .disabled(workspace == nil)
-                .help("Project Settings (actions & environment)")
-            }
-
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    sidebarMode = .search
-                } label: {
-                    Label("Search in Folder", systemImage: "magnifyingglass")
-                }
-                .disabled(workspace == nil)
-                .help("Search in Folder (⇧⌘F)")
-
-                Button {
-                    workspace?.layout.splitActive()
-                } label: {
-                    Label("Split Editor", systemImage: "rectangle.split.2x1")
-                }
-                .disabled(activeDocument == nil)
-                .help("Split Editor (⌘\\)")
-
-                Button {
-                    if let workspace { Task { await workspace.saveActiveDocument() } }
-                } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                }
-                .disabled(activeDocument?.isDirty != true)
-                .help("Save (⌘S)")
-
-                Button {
-                    workspace?.toggleTerminal()
-                } label: {
-                    Label("Terminal", systemImage: "terminal")
-                }
-                .disabled(workspace == nil)
-                .help("Show or Hide Terminal (⌃`)")
-
-                Button(action: openAgent) {
-                    Label("Open \(settings.agentName)", systemImage: "sparkles")
-                }
-                .disabled(workspace == nil || settings.agentCommandLine == nil)
-                .help("Run \(settings.agentName) in a terminal (⌃⇧A)")
-            }
+        .toolbar {
+            WorkspaceToolbar(
+                workspace: workspace,
+                settings: settings,
+                sidebarMode: $sidebarMode,
+                selectedActionName: $selectedActionName,
+                openAgent: openAgent
+            )
+        }
     }
 
     private var splitView: some View {
@@ -248,7 +172,13 @@ struct WorkspaceView: View {
         // ⌘W closes the active tab (a key-window control, so it takes precedence
         // over the built-in window Close). Disabled when no tab is open, so ⌘W
         // then falls through to closing the window.
-        .background { hiddenKeyboardShortcuts }
+        .background {
+            WorkspaceKeyboardShortcuts(
+                workspace: workspace,
+                activeDocument: activeDocument,
+                settings: settings
+            )
+        }
         // Confirm unsaved changes before the window closes (as a sheet).
         .background {
             WindowCloseGuard { proceed in workspace?.requestWindowClose(proceed: proceed) ?? true }
@@ -400,73 +330,6 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Hidden key-window controls: these take precedence over menu equivalents
-    /// (⌘W closes the active tab rather than the window; ⌘= zooms in — the menu
-    /// shows ⌘+, which on ANSI layouts is ⇧⌘=, but people press the unshifted =).
-    @ViewBuilder
-    private var hiddenKeyboardShortcuts: some View {
-        Group {
-            Button("Close Tab") { workspace?.closeActiveTab() }
-                .keyboardShortcut("w", modifiers: .command)
-                .disabled(activeDocument == nil)
-
-            Button("Increase Font Size") {
-                settings.fontSize = min(settings.fontSize + 1, 48)
-            }
-            .keyboardShortcut("=", modifiers: .command)
-        }
-        .hidden()
-    }
-
-    // MARK: - Sidebar
-
-    @ViewBuilder
-    private var sidebar: some View {
-        if let workspace {
-            VStack(spacing: 0) {
-                Picker("Sidebar Mode", selection: $sidebarMode) {
-                    Label("Files", systemImage: "folder").tag(SidebarMode.files)
-                    Label("Search", systemImage: "magnifyingglass").tag(SidebarMode.search)
-                }
-                .pickerStyle(.segmented)
-                .labelStyle(.iconOnly)
-                .labelsHidden()
-                .padding(.horizontal, 8)
-                .frame(height: EditorChrome.headerHeight)
-
-                Divider()
-
-                switch sidebarMode {
-                case .files:
-                    FileOutlineView(workspace: workspace, selection: $selection)
-                        .overlay {
-                            if workspace.rootIsEmpty {
-                                ContentUnavailableView {
-                                    Label("Empty Folder", systemImage: "folder")
-                                } description: {
-                                    Text("Create a file with ⌘N, or drop files here.")
-                                }
-                                // Let Finder drops still reach the outline below.
-                                .allowsHitTesting(false)
-                            }
-                        }
-                case .search:
-                    ProjectSearchView(
-                        model: searchModel,
-                        root: workspace.rootURL,
-                        onOpen: openSearchResult
-                    )
-                }
-            }
-        } else {
-            ProgressView()
-                .controlSize(.small)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-    }
-
-    // MARK: - Detail
-
     private var activeDocument: OpenDocument? {
         workspace?.layout.activePane?.selectedDocument
     }
@@ -525,23 +388,6 @@ struct WorkspaceView: View {
         }
     }
 
-    /// Runs the toolbar-selected action (falling back to the first) in the Run tab.
-    private func runSelectedAction() {
-        guard let workspace else { return }
-        if let action = selectedAction(workspace) { workspace.runProjectAction(action) }
-    }
-
-    /// The action currently chosen in the toolbar picker (falling back to first).
-    private func selectedAction(_ workspace: Workspace) -> ProjectConfig.Action? {
-        let actions = workspace.availableActions
-        return actions.first { $0.name == selectedActionName } ?? actions.first
-    }
-
-    /// The command line of the selected action, for the Run button's tooltip.
-    private func selectedActionCommand(_ workspace: Workspace) -> String {
-        selectedAction(workspace)?.command ?? ""
-    }
-
     private var projectSettingsPresented: Binding<Bool> {
         Binding(
             get: { workspace?.projectSettingsRequested ?? false },
@@ -568,149 +414,6 @@ struct WorkspaceView: View {
             darkTheme: appearance.editorDarkTheme,
             accent: appearance.accent
         )
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        if let workspace {
-            GeometryReader { proxy in
-                let trailing = settings.terminalPlacement == .trailing
-                let isVisible = workspace.terminal.isVisible
-                // AnyLayout swaps V/H arrangement without changing subview
-                // identity, so the SwiftTerm views survive an orientation flip.
-                let layout = trailing
-                    ? AnyLayout(HStackLayout(spacing: 0))
-                    : AnyLayout(VStackLayout(spacing: 0))
-
-                // Clamp so neither the editor nor the terminal can vanish. The
-                // remembered size may exceed what this window currently allows;
-                // we show the clamped value and hand the *clamped* size to the
-                // resize handle so a drag always starts from what's on screen.
-                //
-                // Trailing: the terminal may grow up to 80% of the width, but we
-                // reserve a full minimum pane for *each* open editor pane (+ the
-                // handle) so the terminal — and its header tabs/controls — can
-                // never be pushed past the window's right edge, and no pane's own
-                // tab-bar controls get squeezed off. The editor then gets an
-                // *explicit* width (editor + handle + terminal == available), which
-                // keeps the HStack from overflowing regardless of the editor's own
-                // content minimum (a plain `maxWidth: .infinity` editor won't
-                // shrink below its minimum, so a fixed-width terminal would spill).
-                let handleWidth: CGFloat = 6
-                let paneCount = max(1, workspace.layout.panes.count)
-                let editorReserve = EditorChrome.paneMinWidth * CGFloat(paneCount)
-                let maxWidth = max(200, min(proxy.size.width * 0.8,
-                                            proxy.size.width - editorReserve - handleWidth))
-                let maxHeight = max(120, proxy.size.height - 140)
-                let width = min(max(200, workspace.terminal.dockWidth), maxWidth)
-                let height = min(max(80, workspace.terminal.dockHeight), maxHeight)
-                let editorWidth = max(0, proxy.size.width - handleWidth - width)
-
-                layout {
-                    editorArea(workspace)
-                        // Fixed width in trailing mode so the split sums exactly
-                        // to the available width; flexible otherwise (bottom dock
-                        // or hidden terminal, where the editor fills the row).
-                        .frame(width: trailing && isVisible ? editorWidth : nil)
-
-                    if isVisible {
-                        // The same divider component (and drag model) as the one
-                        // between editor panes, so the terminal resizes as a
-                        // first-class slice of the one split system.
-                        SplitDivider(
-                            vertical: trailing,
-                            onChanged: { translation in
-                                dragTerminal(
-                                    workspace, translation: translation, trailing: trailing,
-                                    maxWidth: maxWidth, maxHeight: maxHeight
-                                )
-                            },
-                            onEnded: {
-                                terminalDragBase = nil
-                                workspace.persistLayoutState()
-                            },
-                            accessibilityLabel: "Resize Terminal",
-                            onAdjust: { step in
-                                adjustTerminal(
-                                    workspace, step: step, trailing: trailing,
-                                    maxWidth: maxWidth, maxHeight: maxHeight
-                                )
-                                workspace.persistLayoutState()
-                            }
-                        )
-                    }
-
-                    dock(workspace)
-                        .frame(width: trailing ? width : nil, height: trailing ? nil : height)
-                        .frame(
-                            width: trailing ? (isVisible ? width : 0) : nil,
-                            height: trailing ? nil : (isVisible ? height : 0)
-                        )
-                        .clipped()
-                        .allowsHitTesting(isVisible)
-                }
-            }
-            // Project first, file second: the window title is what Exposé and
-            // the Window menu show, and with several Ibis windows open the
-            // project name is what tells them apart.
-            .navigationTitle(workspace.displayName)
-            .navigationSubtitle(activeDocument?.name ?? "")
-            // Title-bar proxy icon (⌘-click path menu, draggable to Finder).
-            .navigationDocument(activeDocument?.url ?? workspace.rootURL)
-        } else {
-            ContentUnavailableView(
-                "No File Open",
-                systemImage: "doc.text",
-                description: Text("Select a file from the sidebar to start editing.")
-            )
-        }
-    }
-
-    private func editorArea(_ workspace: Workspace) -> some View {
-        EditorAreaView(
-            workspace: workspace,
-            layout: workspace.layout,
-            configuration: editorConfiguration,
-            onCloseTab: { document, pane in workspace.requestCloseTab(document, in: pane) }
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // The dock stays mounted at its real size even when hidden (an outer frame
-    // collapses the space, the inner frame keeps the terminal sized) so
-    // SwiftTerm views are never detached — detaching resets their scrollback.
-    private func dock(_ workspace: Workspace) -> some View {
-        TerminalDockView(workspace: workspace, dock: workspace.terminal)
-    }
-
-    /// Resizes the terminal from a divider drag. Dragging the divider *toward*
-    /// the editor grows the terminal (hence `base - translation`); clamped so
-    /// neither side vanishes.
-    private func dragTerminal(
-        _ workspace: Workspace, translation: CGFloat, trailing: Bool,
-        maxWidth: CGFloat, maxHeight: CGFloat
-    ) {
-        let current = trailing ? workspace.terminal.dockWidth : workspace.terminal.dockHeight
-        let base = terminalDragBase ?? current
-        if terminalDragBase == nil { terminalDragBase = base }
-        if trailing {
-            workspace.terminal.dockWidth = min(max(200, base - translation), maxWidth)
-        } else {
-            workspace.terminal.dockHeight = min(max(80, base - translation), maxHeight)
-        }
-    }
-
-    /// Grows (or shrinks) the terminal by a discrete step for the divider's
-    /// accessibility adjustable action.
-    private func adjustTerminal(
-        _ workspace: Workspace, step: CGFloat, trailing: Bool,
-        maxWidth: CGFloat, maxHeight: CGFloat
-    ) {
-        if trailing {
-            workspace.terminal.dockWidth = min(max(200, workspace.terminal.dockWidth + step), maxWidth)
-        } else {
-            workspace.terminal.dockHeight = min(max(80, workspace.terminal.dockHeight + step), maxHeight)
-        }
     }
 
     private func openSearchResult(_ url: URL, _ match: SearchMatch) {
@@ -771,4 +474,3 @@ private struct WindowBridge: NSViewRepresentable {
         }
     }
 }
-

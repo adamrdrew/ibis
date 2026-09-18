@@ -258,6 +258,15 @@ final class OpenDocument: Identifiable {
         var didSave: Bool { if case .saved = self { true } else { false } }
     }
 
+    /// How a request to replace the buffer with the current disk contents ended.
+    /// A failed read must remain distinct from a successful revert: the existing
+    /// buffer may contain the user's only copy of their edits.
+    enum RevertOutcome: Sendable, Equatable {
+        case reverted
+        case superseded
+        case failed(String)
+    }
+
     /// The in-flight save, if any. Saves chain on it so two overlapping saves
     /// can't write out of order (the older content landing on disk last while
     /// the buffer is already marked clean).
@@ -350,20 +359,38 @@ final class OpenDocument: Identifiable {
     /// read path as the initial load. `force` reflects an explicit user "Revert"
     /// (discard my edits); the automatic reconcile path passes `force == false`
     /// so an edit that lands *during* the async read isn't silently overwritten.
-    func revertToSaved(force: Bool = false) async {
-        guard let fileURL = url else { return }
+    @ObservationIgnored private var diskReadTicket = 0
+
+    @discardableResult
+    func revertToSaved(force: Bool = false) async -> RevertOutcome {
+        guard let fileURL = url else { return .failed("The document has no file on disk.") }
         let generation = editGeneration
+        diskReadTicket += 1
+        let ticket = diskReadTicket
         let outcome = await Task.detached(priority: .userInitiated) {
             OpenDocument.read(fileURL)
         }.value
+        // Filesystem events can start several reads while an earlier one is still
+        // in flight. Only the newest request may update the buffer; otherwise a
+        // slow, stale read can land after a newer one and roll the editor back.
+        guard ticket == diskReadTicket else { return .superseded }
+        // A failed read did not replace the buffer. In particular, never clear
+        // `isDirty` here: the visible text may be the user's only remaining copy
+        // after the file was deleted or became unreadable.
+        if case .failure(let message) = outcome {
+            hasExternalChanges = true
+            isFileMissing = !FileManager.default.fileExists(atPath: fileURL.path)
+            return .failed(message)
+        }
         // A keystroke arrived while we were reading disk: keep the user's edits
         // and flag the divergence instead of dropping them.
         guard force || editGeneration == generation else {
             hasExternalChanges = true
-            return
+            return .superseded
         }
         apply(outcome)
         isDirty = false
+        return .reverted
     }
 
     // MARK: - External-modification detection
@@ -394,7 +421,7 @@ final class OpenDocument: Identifiable {
         if isDirty {
             hasExternalChanges = true
         } else {
-            await revertToSaved()
+            _ = await revertToSaved()
         }
     }
 

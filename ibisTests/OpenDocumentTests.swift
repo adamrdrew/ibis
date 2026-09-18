@@ -275,6 +275,29 @@ import Foundation
         }
     }
 
+    @Test func failedRevertPreservesUnsavedBufferAndDirtyState() async throws {
+        try await TestSupport.withTempDir { dir in
+            let url = dir.appending(path: "a.txt")
+            try "original".write(to: url, atomically: true, encoding: .utf8)
+            let doc = OpenDocument(url: url)
+            await doc.loadIfNeeded()
+            doc.text = "my only unsaved copy"
+            doc.registerUserEdit()
+            try FileManager.default.removeItem(at: url)
+
+            let outcome = await doc.revertToSaved(force: true)
+
+            guard case .failed = outcome else {
+                Issue.record("Expected the missing file read to fail")
+                return
+            }
+            #expect(doc.text == "my only unsaved copy")
+            #expect(doc.isDirty)
+            #expect(doc.hasExternalChanges)
+            #expect(doc.isFileMissing)
+        }
+    }
+
     @Test func reconcileFlagsAMissingFile() async throws {
         try await TestSupport.withTempDir { dir in
             let url = dir.appending(path: "a.txt")

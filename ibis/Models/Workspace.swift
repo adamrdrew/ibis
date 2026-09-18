@@ -227,8 +227,8 @@ final class Workspace {
     /// `get_selection` tool reads the selection from the right window.
     @ObservationIgnored weak var focusedEditor: NSTextView?
 
-    /// True while a window-close save sheet is up, to avoid presenting a second.
-    @ObservationIgnored private var isPresentingCloseSheet = false
+    /// Owns the window-close confirmation state machine.
+    @ObservationIgnored private lazy var closeCoordinator = WorkspaceCloseCoordinator(workspace: self)
 
     /// Whether the opened folder is empty (loaded, no visible children). Updated
     /// only outside the file browser's layout pass — never a live read of
@@ -964,7 +964,9 @@ final class Workspace {
         case .alertFirstButtonReturn: // Save Anyway — force past the disk check.
             return await resolve(await document.save(force: true), for: document)
         case .alertThirdButtonReturn: // Revert to Disk — discard the buffer's edits.
-            await document.revertToSaved(force: true)
+            if case .failed(let message) = await document.revertToSaved(force: true) {
+                presentError("Couldn’t revert “\(document.name)”: \(message). Your unsaved buffer was preserved.")
+            }
             return false // nothing of the user's was written; don't close over it
         default:
             return false
@@ -992,6 +994,15 @@ final class Workspace {
         panel.directoryURL = document.url?.deletingLastPathComponent()
             ?? (isDirectory ? rootURL : rootURL.deletingLastPathComponent())
         guard panel.runModal() == .OK, let url = panel.url else { return false }
+
+        // The save panel only knows about the file on disk. It cannot warn that
+        // another Ibis tab has newer, unsaved contents for the same URL. Replacing
+        // that tab below without a second confirmation would make its buffer
+        // unreachable and silently lose those edits.
+        if let displaced = documentCache[cacheKey(url)], displaced !== document,
+           displaced.isDirty, !(await confirmReplacingDirtyDocument(at: url)) {
+            return false
+        }
 
         // Write off the main actor — a large buffer to a slow/network volume
         // would otherwise beachball the UI. Capture the edit generation so a
@@ -1031,6 +1042,22 @@ final class Workspace {
         // Keep the pane's selection on this same document (its id is unchanged).
         Task { await reloadDirectory(at: url.deletingLastPathComponent()) }
         return true
+    }
+
+    /// Confirms the destructive in-memory half of Save As when the destination is
+    /// already open and dirty. This must run before any bytes are written.
+    private func confirmReplacingDirtyDocument(at url: URL) async -> Bool {
+        guard let window = window ?? NSApp.keyWindow else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "“\(url.lastPathComponent)” has unsaved changes in another tab."
+        alert.informativeText = "Replacing it will discard those unsaved changes and use this document instead."
+        alert.addButton(withTitle: "Replace Anyway")
+        alert.addButton(withTitle: "Cancel")
+        let response = await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0) }
+        }
+        return response == .alertFirstButtonReturn
     }
 
     func saveActiveDocumentAs() {
@@ -1252,7 +1279,11 @@ final class Workspace {
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { response in
             if response == .alertFirstButtonReturn {
-                Task { await document.revertToSaved(force: true) }
+                Task {
+                    if case .failed(let message) = await document.revertToSaved(force: true) {
+                        self.presentError("Couldn’t revert “\(document.name)”: \(message). Your unsaved buffer was preserved.")
+                    }
+                }
             }
         }
     }
@@ -1678,91 +1709,14 @@ final class Workspace {
     /// over: either presenting a save sheet that will call `proceed()` once the
     /// user resolves it, or (re-entrantly) declining to prompt twice.
     func requestWindowClose(proceed: @escaping () -> Void) -> Bool {
-        // Flush the layout now: persistence is otherwise edge-triggered, so a
-        // change made before the restore gate opened would be lost with the
-        // window.
-        persistLayoutState()
-        let dirty = dirtyDocuments
-        guard !dirty.isEmpty else { return true }
-        guard !isPresentingCloseSheet, let window = window ?? NSApp.keyWindow else { return false }
-
-        isPresentingCloseSheet = true
-        presentCloseConfirmation(dirty, on: window) { [weak self] outcome in
-            self?.isPresentingCloseSheet = false
-            switch outcome {
-            case .discarded, .saved:
-                proceed()
-            case .cancelled, .saveFailed:
-                break // keep the window open
-            }
-        }
-        return false
+        closeCoordinator.requestWindowClose(proceed: proceed)
     }
 
     /// Confirms and (optionally) saves this window's dirty documents when the app
     /// is quitting. Returns `true` if the app may proceed to quit this window
     /// (saved or discarded), `false` if the user cancelled or a save failed.
     func confirmCloseForQuit() async -> Bool {
-        persistLayoutState()
-        let dirty = dirtyDocuments
-        guard !dirty.isEmpty else { return true }
-        guard let window = window ?? NSApp.keyWindow else { return true }
-        // Bring the window forward so the user sees which one they're answering.
-        window.makeKeyAndOrderFront(nil)
-        return await withCheckedContinuation { continuation in
-            presentCloseConfirmation(dirty, on: window) { outcome in
-                switch outcome {
-                case .saved, .discarded: continuation.resume(returning: true)
-                case .cancelled, .saveFailed: continuation.resume(returning: false)
-                }
-            }
-        }
-    }
-
-    private enum CloseOutcome { case saved, discarded, cancelled, saveFailed }
-
-    /// Presents the Save / Cancel / Don't Save sheet and, on Save, writes every
-    /// dirty document — reporting a failure instead of pretending it succeeded.
-    private func presentCloseConfirmation(
-        _ dirty: [OpenDocument],
-        on window: NSWindow,
-        completion: @escaping (CloseOutcome) -> Void
-    ) {
-        let message = dirty.count == 1
-            ? "Do you want to save the changes you made to “\(dirty[0].name)”?"
-            : "You have \(dirty.count) documents with unsaved changes."
-        let alert = makeSaveAlert(message: message, informative: "Your changes will be lost if you don’t save them.")
-        alert.beginSheetModal(for: window) { [weak self] response in
-            guard let self else { completion(.cancelled); return }
-            switch response {
-            case .alertFirstButtonReturn: // Save
-                Task { @MainActor in
-                    if await self.saveAllForClose(dirty) {
-                        completion(.saved)
-                    } else {
-                        self.presentError("Some changes couldn’t be saved, so the window stayed open.")
-                        completion(.saveFailed)
-                    }
-                }
-            case .alertThirdButtonReturn: // Don't Save
-                completion(.discarded)
-            default: // Cancel
-                completion(.cancelled)
-            }
-        }
-    }
-
-    /// Saves every dirty document before the window closes, routing untitled
-    /// buffers through a Save panel and files changed on disk through the
-    /// conflict prompt. Returns `true` only if *all* saves succeeded (a
-    /// cancelled Save panel, a declined overwrite, or a write failure returns
-    /// `false`), so the caller can keep the window open rather than lose edits.
-    private func saveAllForClose(_ dirty: [OpenDocument]) async -> Bool {
-        var allSucceeded = true
-        for document in dirty {
-            if !(await saveDocument(document)) { allSucceeded = false }
-        }
-        return allSucceeded
+        await closeCoordinator.confirmCloseForQuit()
     }
 
     /// Presents a non-blocking error alert as a sheet on this window.
