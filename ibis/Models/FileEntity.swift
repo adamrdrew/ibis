@@ -4,8 +4,10 @@ import UniformTypeIdentifiers
 
 /// Represents a file in the workspace to the system's intelligence (Siri /
 /// Apple Intelligence). Annotating the file-browser rows with this entity is
-/// what makes macOS 27 auto-inject the "Ask Siri" context-menu item — the
-/// AppKit equivalent of the annotation SwiftUI does for free.
+/// what lets macOS 27 auto-inject the "Ask Siri" context-menu item — the AppKit
+/// equivalent of the annotation SwiftUI does for free. The underlying entity
+/// annotation APIs are declared available before macOS 27; the menu item itself
+/// remains system-controlled.
 ///
 /// Uses AppIntents' built-in `FileEntity`, whose identifier carries the file
 /// URL, so the system can open and read the file to answer questions about it.

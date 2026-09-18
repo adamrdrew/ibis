@@ -18,9 +18,10 @@ import SwiftMCP
 /// rejected. Declared on the class, they stay nonisolated on every compiler.
 // Not `final`: `GatedIbisMCPServer` below overrides the macro-generated tool
 // listing/dispatch members, which is the only seam SwiftMCP leaves for hiding
-// a declared tool at runtime.
+// a declared tool at runtime. The implementation is stateless, so the explicit
+// `@unchecked Sendable` conformance is safe despite the required subclassing.
 @MCPServer(name: "ibis", version: "1.0")
-nonisolated class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding {
+nonisolated class IbisMCPServer: MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding, @unchecked Sendable {
     /// The bearer token of the current connection, which identifies the project
     /// window this agent is bound to. Every tool routes by this.
     private func projectToken() async -> String? {

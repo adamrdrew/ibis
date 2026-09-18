@@ -7,7 +7,7 @@ extension String {
     /// project slug): the same folder arrives with a trailing slash from
     /// Finder/`open` and usually without one from the CLI, and those must not
     /// key to different entries.
-    var strippingTrailingSlashes: String {
+    nonisolated var strippingTrailingSlashes: String {
         var path = self
         while path.count > 1 && path.hasSuffix("/") { path.removeLast() }
         return path

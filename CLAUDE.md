@@ -193,11 +193,14 @@ disturbed. It can veto the close and re-issue it (via a `proceed` closure /
 `performClose`) once the confirmation resolves. Don't just replace `window.delegate`
 outright — you'll break SwiftUI window handling.
 
-**Building with Xcode 26 (CI) vs the Xcode 27 beta (dev machine).** CI compiles
-with the macOS 26.6 SDK; two things only break there. (1)
-`NSTableViewAppIntentsDataSource` doesn't exist in pre-27 SDKs, so the "Ask
-Siri" wiring in `FileOutlineView` is gated `#if compiler(>=6.4)` (Swift 6.4 ⇔
-Xcode 27) — keep any new 27-SDK-only API behind the same gate. (2) The project
+**Building with Xcode 26 vs Xcode 27.** CI selects the newest stable Xcode, while
+the project continues to support Xcode 26 locally. Two compatibility differences
+matter. (1) `NSTableViewAppIntentsDataSource` is declared by the App Intents/AppKit
+overlay shipped with Xcode 27 but is absent from Xcode 26's SDK. The released
+Xcode 27 SDK backdates the API's runtime availability to macOS 15.4; the
+`#if compiler(>=6.4)` gate in `FileOutlineView` is therefore a source-SDK
+compatibility gate, not a macOS 27 runtime availability check. Keep new APIs
+missing from Xcode 26 behind an equivalent compiler gate. (2) The project
 sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and Xcode 26's compiler
 rejects MainActor-isolated conformances to `Sendable`-constrained protocols
 (Xcode 27's accepts them), so types whose conformances must be nonisolated —
@@ -208,7 +211,10 @@ conformances the `@MCPServer` macro emits in an extension (Xcode 26 gives the
 extension MainActor default isolation anyway), so the SwiftMCP conformances
 (`MCPServer, MCPToolProviding, MCPResourceProviding, MCPPromptProviding`) are
 written explicitly on the class declaration — the macro then skips emitting
-them. Don't remove them as "redundant".
+them. `IbisMCPServer` is intentionally non-final because the runtime tool gate
+subclasses it, so its stateless implementation uses an explicit audited
+`@unchecked Sendable` conformance. Don't remove either declaration as
+"redundant."
 
 **Git decorations in the file browser** (`M`/`U`/`A`/`R`/`D` badges, roll-up dot)
 come from the same `git status --porcelain=v2` probe as the status bar — the

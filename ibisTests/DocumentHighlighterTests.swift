@@ -10,7 +10,7 @@ import AppKit
 /// "wrote the same value again" is not free — it is the whole cost.
 @MainActor
 final class CountingTextStorage: NSTextStorage {
-    private let backing = NSMutableAttributedString()
+    nonisolated(unsafe) private let backing = NSMutableAttributedString()
     nonisolated(unsafe) var attributeWrites = 0
 
     override nonisolated var string: String { backing.string }
