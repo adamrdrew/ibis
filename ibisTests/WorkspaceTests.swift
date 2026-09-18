@@ -628,7 +628,7 @@ import Foundation
         }
     }
 
-    @Test func restoreSessionRelaunchesNonClaudeAgentFresh() async throws {
+    @Test func restoreSessionResumesCodexForTheWorkspace() async throws {
         try await TestSupport.withIsolatedDefaults {
             try await TestSupport.withTempDir { dir in
                 let settings = AppSettings()
@@ -644,9 +644,10 @@ import Foundation
                 let workspace = Workspace(rootURL: dir, isDirectory: true)
                 await workspace.restoreSession(settings: settings)
 
-                // The tab relaunches as the currently configured agent.
+                // Codex's --last lookup is scoped to the terminal cwd, so the
+                // restored tab resumes this workspace's latest conversation.
                 let restored = try #require(workspace.terminal.sessions.first)
-                #expect(restored.command == "codex")
+                #expect(restored.command == "codex resume --last")
                 #expect(restored.role == .agent)
             }
         }

@@ -229,7 +229,10 @@ private struct AgentSettingsView: View {
                 Picker("Your Agent", selection: $settings.agentKind) {
                     ForEach(AgentKind.allCases) { Text($0.displayName).tag($0) }
                 }
-                Text("Determines which config file format Ibis writes below.")
+                .onChange(of: settings.agentKind) { oldKind, newKind in
+                    settings.applyAgentPreset(from: oldKind, to: newKind)
+                }
+                Text("Selects the agent integration and fills in its default name and command. Your custom values are preserved.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -261,11 +264,13 @@ private struct AgentSettingsView: View {
                             if settings.mcpEnabled { MCPService.restart(settings: settings) }
                         }
 
-                    Toggle("Inject Ibis system prompt (Claude Code)", isOn: $settings.agentInjectSystemPrompt)
+                    if settings.agentKind == .claude {
+                        Toggle("Inject Ibis system prompt", isOn: $settings.agentInjectSystemPrompt)
+                    }
 
                     Toggle("Expose review tool", isOn: $settings.mcpReviewToolEnabled)
 
-                    Text("Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only. The system prompt tells Claude Code it is running in Ibis and how to use its tools; it is appended at launch via --append-system-prompt.")
+                    Text(mcpIntegrationDescription)
                         .font(.callout)
                         .foregroundStyle(.secondary)
 
@@ -284,6 +289,18 @@ private struct AgentSettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private var mcpIntegrationDescription: String {
+        let security = "Lets your agent drive and read its own project window. Each project gets a unique token, so an agent can only reach the window it was launched in. Bound to localhost only."
+        switch settings.agentKind {
+        case .claude:
+            return security + " Ibis passes the live MCP connection and optional orientation prompt to Claude at launch."
+        case .codex:
+            return security + " Ibis passes the live MCP connection to Codex at launch; the server supplies Ibis orientation during MCP initialization."
+        case .antigravity, .custom:
+            return security + " Ibis writes the selected project configuration format when you add its tools."
+        }
     }
 }
 

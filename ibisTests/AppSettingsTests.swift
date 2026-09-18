@@ -106,6 +106,21 @@ import Foundation
         }
     }
 
+    @Test func changingAgentKindAppliesDefaultsWithoutOverwritingCustomValues() async {
+        TestSupport.withIsolatedDefaults {
+            let settings = AppSettings()
+            settings.applyAgentPreset(from: .claude, to: .codex)
+            #expect(settings.agentName == "Codex")
+            #expect(settings.agentCommand == "codex")
+
+            settings.agentName = "My Agent"
+            settings.agentCommand = "/opt/custom-agent"
+            settings.applyAgentPreset(from: .codex, to: .claude)
+            #expect(settings.agentName == "My Agent")
+            #expect(settings.agentCommand == "/opt/custom-agent")
+        }
+    }
+
     @Test func launchCommandInjectsOrientationForClaudeWithMCP() async throws {
         try TestSupport.withIsolatedDefaults {
             let settings = AppSettings()

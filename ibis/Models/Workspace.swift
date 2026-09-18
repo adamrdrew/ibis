@@ -644,21 +644,22 @@ final class Workspace {
     /// resuming its conversation if a transcript exists on disk, creating it
     /// with `--session-id` if not (Claude only writes the transcript on the
     /// first message). The session has a single claimant, so only the first
-    /// Claude tab launches; any further persisted agent tabs (from snapshots
+    /// agent tab launches; any further persisted agent tabs (from snapshots
     /// written before one-project-one-agent) come back as plain shells rather
-    /// than fighting over it. A non-Claude agent relaunches fresh, and a tab
+    /// than fighting over it. Codex resumes its most recent conversation for
+    /// this working directory, while other agents relaunch fresh. A tab
     /// with no agent configured comes back as an idle agent-role tab whose
     /// Restart reclaims the project session once an agent is configured.
     private func restoreAgentTab(_ session: PersistedTerminalSession, settings: AppSettings) -> TerminalSession {
+        guard agentTab == nil else {
+            return terminal.newSession(title: session.title, takeFocus: false)
+        }
         if settings.agentKind == .claude {
-            guard agentTab == nil else {
-                return terminal.newSession(title: session.title, takeFocus: false)
-            }
             if let (command, resume) = MCPService.agentRelaunchCommand(
                 settings: settings,
                 sessionID: MCPService.projectSessionID(for: projectRoot),
                 workingDirectory: projectRoot,
-                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+                mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
             ) {
                 MCPService.bindAgent(to: self, settings: settings)
                 let restored = terminal.newSession(
@@ -667,11 +668,17 @@ final class Workspace {
                 if resume { armResumeRecovery(for: restored, settings: settings) }
                 return restored
             }
-        } else if let command = MCPService.launchCommand(settings: settings) {
+        } else if let command = MCPService.launchCommand(
+            settings: settings,
+            resume: settings.agentKind == .codex,
+            mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
+        ) {
             MCPService.bindAgent(to: self, settings: settings)
-            return terminal.newSession(
+            let restored = terminal.newSession(
                 command: command, title: session.title, role: .agent, takeFocus: false
             )
+            if settings.agentKind == .codex { armCodexResumeRecovery(for: restored, settings: settings) }
+            return restored
         }
         // No agent configured: preserve the tab and its role.
         return terminal.newSession(title: session.title, role: .agent, takeFocus: false)
@@ -714,11 +721,31 @@ final class Workspace {
             disarm()
             guard let command = MCPService.launchCommand(
                 settings: settings, sessionID: sid,
-                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+                mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
             ) else { return }
             MCPService.bindAgent(to: self, settings: settings)
             session.relaunch(
                 notice: "Previous \(settings.agentName) conversation not found — starting it over.",
+                command: command
+            )
+        }
+    }
+
+    /// `codex resume --last` is scoped to the project cwd. If there is no prior
+    /// conversation, recover once with a normal fresh launch instead of leaving
+    /// a restored Ibis tab at an error prompt.
+    private func armCodexResumeRecovery(for session: TerminalSession, settings: AppSettings) {
+        session.onProcessExit = { [weak self, weak session] exitCode, ranFor in
+            guard let self, let session else { return }
+            session.onProcessExit = nil
+            guard ranFor < 15, (exitCode ?? 0) != 0,
+                  let command = MCPService.launchCommand(
+                    settings: settings,
+                    mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
+                  ) else { return }
+            MCPService.bindAgent(to: self, settings: settings)
+            session.relaunch(
+                notice: "Previous \(settings.agentName) conversation not found — starting a new one.",
                 command: command
             )
         }
@@ -1536,7 +1563,7 @@ final class Workspace {
                 settings: settings,
                 sessionID: MCPService.projectSessionID(for: projectRoot),
                 workingDirectory: projectRoot,
-                mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+                mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
             ) else { return }
             MCPService.bindAgent(to: self, settings: settings)
             let launched = runAgent(command: command, name: settings.agentName)
@@ -1546,7 +1573,7 @@ final class Workspace {
 
         guard let command = MCPService.launchCommand(
             settings: settings,
-            mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+            mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
         ) else { return }
         MCPService.bindAgent(to: self, settings: settings)
         runAgent(command: command, name: settings.agentName)
@@ -1565,9 +1592,19 @@ final class Workspace {
                    settings: settings,
                    sessionID: MCPService.projectSessionID(for: projectRoot),
                    workingDirectory: projectRoot,
-                   mcpConfig: MCPService.claudeMCPConfig(for: self, settings: settings)
+                   mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
                ) {
                 session.restart(shellOverride: shellOverride, command: command)
+                return
+            }
+            if settings.agentKind == .codex,
+               let command = MCPService.launchCommand(
+                settings: settings,
+                resume: true,
+                mcpConfig: MCPService.agentMCPConfig(for: self, settings: settings)
+               ) {
+                session.restart(shellOverride: shellOverride, command: command)
+                armCodexResumeRecovery(for: session, settings: settings)
                 return
             }
         }

@@ -142,6 +142,44 @@ nonisolated final class GatedIbisMCPServer: IbisMCPServer {
     }
 }
 
+/// Adds the server-wide orientation that MCP clients place in the agent's
+/// context. SwiftMCP 1.x does not yet model the `instructions` field from the
+/// initialize result, so this wrapper injects that one protocol field while
+/// delegating every other message and lifecycle hook unchanged.
+nonisolated final class InstructedIbisMCPServer: MCPServer {
+    private let wrapped: GatedIbisMCPServer
+
+    init(wrapped: GatedIbisMCPServer = GatedIbisMCPServer()) {
+        self.wrapped = wrapped
+    }
+
+    var serverName: String { wrapped.serverName }
+    var serverVersion: String { wrapped.serverVersion }
+    var serverDescription: String? { wrapped.serverDescription }
+    var serverTitle: String? { wrapped.serverTitle }
+    var serverWebsiteUrl: URL? { wrapped.serverWebsiteUrl }
+
+    func handleMessage(_ message: JSONRPCMessage) async -> JSONRPCMessage? {
+        guard let response = await wrapped.handleMessage(message) else { return nil }
+        guard case .request(let request) = message, request.method == "initialize",
+              case .response(var responseData) = response,
+              case .object(var result) = responseData.result else { return response }
+        result["instructions"] = .string(
+            MCPService.agentOrientation(reviewToolEnabled: MCPToolGate.reviewToolExposed)
+        )
+        responseData.result = .object(result)
+        return .response(responseData)
+    }
+
+    func handleRootsListChanged() async {
+        await wrapped.handleRootsListChanged()
+    }
+
+    func shutdown() async {
+        await wrapped.shutdown()
+    }
+}
+
 /// Owns the running MCP server + HTTP transport, bound to 127.0.0.1.
 @MainActor
 @Observable
@@ -163,7 +201,7 @@ final class MCPServerController {
     func start(preferredPort: Int) {
         guard !isRunning, transport == nil else { return }
         startError = nil
-        let server = GatedIbisMCPServer()
+        let server = InstructedIbisMCPServer()
         let transport = HTTPSSETransport(server: server, host: "127.0.0.1", port: preferredPort)
         // Accept any token that belongs to a currently-open project window. The
         // token then routes each request to that project (see IbisMCPServer).
@@ -282,7 +320,7 @@ enum MCPService {
     /// prompt never advertises tools the server will not list; when it is
     /// exposed, the prompt also directs the agent to route code changes
     /// through it instead of its own file-editing tools.
-    static func agentOrientation(reviewToolEnabled: Bool) -> String {
+    nonisolated static func agentOrientation(reviewToolEnabled: Bool) -> String {
         let reviewBullet = reviewToolEnabled ? """
 
     - propose_edit and propose_patch: make code changes that the human reviews as a diff and approves before they are applied and saved.
@@ -361,6 +399,12 @@ enum MCPService {
         mcpConfig: String? = nil
     ) -> String? {
         guard let base = settings.agentCommandLine else { return nil }
+        if settings.agentKind == .codex {
+            var command = base
+            if let mcpConfig { command += " " + mcpConfig }
+            if resume { command += " resume --last" }
+            return command
+        }
         guard settings.agentKind == .claude else { return base }
         // The id is interpolated into a `shell -l -c` string, so accept nothing
         // but a well-formed UUID: on the restore path it comes from persisted
@@ -409,6 +453,27 @@ enum MCPService {
             withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes]
         ), let json = String(data: data, encoding: .utf8) else { return nil }
         return "--mcp-config '\(json)'"
+    }
+
+    /// Launch-time Codex config for this Ibis window. The listener normally
+    /// uses an ephemeral port, so putting it in a tracked `.codex/config.toml`
+    /// goes stale on the next launch. CLI overrides keep the binding current;
+    /// the bearer token remains in the process environment rather than the
+    /// command line.
+    static func codexMCPConfig(for workspace: Workspace, settings: AppSettings) -> String? {
+        guard settings.agentKind == .codex, settings.mcpEnabled, let port = runningPort else { return nil }
+        _ = MCPBridge.shared.token(for: workspace)
+        let url = MCPConfigWriter.serverURL(port: port)
+        return "-c 'mcp_servers.ibis.url=\"\(url)\"' "
+            + "-c 'mcp_servers.ibis.bearer_token_env_var=\"IBIS_MCP_TOKEN\"'"
+    }
+
+    static func agentMCPConfig(for workspace: Workspace, settings: AppSettings) -> String? {
+        switch settings.agentKind {
+        case .claude: claudeMCPConfig(for: workspace, settings: settings)
+        case .codex: codexMCPConfig(for: workspace, settings: settings)
+        case .antigravity, .custom: nil
+        }
     }
 
     /// The command to relaunch an agent tab that owns `sessionID`: `--resume`
@@ -478,10 +543,9 @@ enum MCPService {
     /// agent is automatically bound to its own window. No-op if MCP is off.
     static func bindAgent(to workspace: Workspace, settings: AppSettings) {
         guard settings.mcpEnabled, let port = runningPort else { return }
-        // Claude is bound inline on the command line (claudeMCPConfig), so no
-        // config file is written into the project for it. Other agents have no
-        // CLI-config option and still get a merged config file.
-        guard settings.agentKind != .claude else { return }
+        // Claude and Codex are bound inline on the command line, so no
+        // launch-specific config file is written into (or dirties) the project.
+        guard settings.agentKind != .claude, settings.agentKind != .codex else { return }
         let token = MCPBridge.shared.token(for: workspace)
         do {
             _ = try MCPConfigWriter.write(
