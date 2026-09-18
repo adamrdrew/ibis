@@ -49,6 +49,21 @@ import SwiftMCP
         #expect(!MCPService.agentOrientation(reviewToolEnabled: false).contains("propose_edit"))
     }
 
+    @Test func initializeResponseIncludesAgentOrientation() async throws {
+        let server = InstructedIbisMCPServer()
+        let response = await server.handleMessage(.request(
+            id: 1,
+            method: "initialize",
+            params: ["protocolVersion": .string(MCPProtocolVersion.latest)]
+        ))
+        guard case .response(let data) = response,
+              case .object(let result) = data.result else {
+            Issue.record("Expected an initialize success response")
+            return
+        }
+        #expect(result["instructions"]?.stringValue?.contains("running inside Ibis") == true)
+    }
+
     @Test func gatedServerHidesAndRejectsReviewToolWhenOff() async throws {
         let server = GatedIbisMCPServer()
         let wasExposed = MCPToolGate.reviewToolExposed
@@ -124,6 +139,22 @@ import SwiftMCP
         }
     }
 
+    @Test func codexLaunchUsesLiveConfigAndCanResumeForWorkingDirectory() async {
+        TestSupport.withIsolatedDefaults {
+            let settings = AppSettings()
+            settings.agentCommand = "codex"
+            settings.agentArgs = "--sandbox danger-full-access"
+            settings.agentKind = .codex
+
+            let config = "-c 'mcp_servers.ibis.url=\"http://127.0.0.1:4321/mcp\"'"
+            let fresh = MCPService.launchCommand(settings: settings, mcpConfig: config)
+            #expect(fresh == "codex --sandbox danger-full-access " + config)
+
+            let resumed = MCPService.launchCommand(settings: settings, resume: true, mcpConfig: config)
+            #expect(resumed == "codex --sandbox danger-full-access " + config + " resume --last")
+        }
+    }
+
     @Test func launchCommandRejectsMalformedSessionIDs() async {
         TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
@@ -142,7 +173,7 @@ import SwiftMCP
         }
     }
 
-    @Test func launchCommandIgnoresSessionForNonClaudeAgent() async {
+    @Test func codexIgnoresClaudeSessionIDButHonorsResume() async {
         TestSupport.withIsolatedDefaults {
             let settings = AppSettings()
             settings.agentCommand = "codex"
@@ -151,7 +182,7 @@ import SwiftMCP
 
             let sid = UUID().uuidString
             #expect(MCPService.launchCommand(settings: settings, sessionID: sid) == "codex")
-            #expect(MCPService.launchCommand(settings: settings, sessionID: sid, resume: true) == "codex")
+            #expect(MCPService.launchCommand(settings: settings, sessionID: sid, resume: true) == "codex resume --last")
         }
     }
 

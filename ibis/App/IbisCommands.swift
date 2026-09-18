@@ -265,7 +265,10 @@ struct IbisCommands: Commands {
     private func runAgent() {
         // Same path as the toolbar button, so a menu-launched Claude gets the
         // same session pinning (and is restorable) as any other launch.
-        workspace?.launchConfiguredAgent(settings: settings)
+        Task { @MainActor in
+            await MCPService.awaitReady()
+            workspace?.launchConfiguredAgent(settings: settings)
+        }
     }
 
     /// Routes "Send Selection to Agent" down the responder chain so it acts on

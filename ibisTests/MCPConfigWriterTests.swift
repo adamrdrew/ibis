@@ -165,8 +165,25 @@ import Foundation
             // Codex reads the token from the environment, never inline.
             #expect(toml.contains(#"bearer_token_env_var = "IBIS_MCP_TOKEN""#))
             #expect(!toml.contains("cxtok"))
+            #expect(gitignore(in: root).contains(".codex/config.toml"))
             // …so the user must be told the value somewhere: the result message.
             #expect(result.message.contains("cxtok"))
+        }
+    }
+
+    @Test func codexRefusesToWriteLaunchSpecificPortIntoTrackedConfig() throws {
+        try TestSupport.withTempDir { root in
+            let dir = root.appending(path: ".codex")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            let file = dir.appending(path: "config.toml")
+            try "[general]\n".write(to: file, atomically: true, encoding: .utf8)
+            try git(["init", "-q"], in: root)
+            try git(["add", ".codex/config.toml"], in: root)
+
+            #expect(throws: (any Error).self) {
+                _ = try MCPConfigWriter.write(agent: .codex, projectRoot: root, port: 9000, token: "t")
+            }
+            #expect(try String(contentsOf: file, encoding: .utf8) == "[general]\n")
         }
     }
 

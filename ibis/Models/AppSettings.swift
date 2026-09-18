@@ -51,6 +51,24 @@ enum AgentKind: String, CaseIterable, Identifiable {
         case .custom: "Custom"
         }
     }
+
+    var defaultAgentName: String {
+        switch self {
+        case .claude: "Claude"
+        case .codex: "Codex"
+        case .antigravity: "Antigravity"
+        case .custom: "Agent"
+        }
+    }
+
+    var defaultCommand: String {
+        switch self {
+        case .claude: "claude"
+        case .codex: "codex"
+        case .antigravity: "antigravity"
+        case .custom: ""
+        }
+    }
 }
 
 /// User-configurable editor and appearance settings, shared across all windows
@@ -202,6 +220,17 @@ final class AppSettings {
 
     /// A URL-safe random token used as the MCP bearer credential.
     static func freshToken() -> String { generateToken() }
+
+    /// Applies a selected agent's useful defaults without overwriting a name or
+    /// executable the user has customized.
+    func applyAgentPreset(from previous: AgentKind, to selected: AgentKind) {
+        if agentName.isEmpty || agentName == previous.defaultAgentName {
+            agentName = selected.defaultAgentName
+        }
+        if agentCommand.isEmpty || agentCommand == previous.defaultCommand {
+            agentCommand = selected.defaultCommand
+        }
+    }
 
     private static func generateToken() -> String {
         let bytes = (0..<24).map { _ in UInt8.random(in: 0...255) }

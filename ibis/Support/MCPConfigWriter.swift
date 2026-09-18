@@ -152,6 +152,9 @@ nonisolated enum MCPConfigWriter {
     // MARK: Codex — .codex/config.toml (project)
 
     private static func writeCodex(root: URL, port: Int, token: String) throws -> Result {
+        if isGitTracked(".codex/config.toml", root: root) {
+            throw MergeError(message: ".codex/config.toml would contain Ibis’s launch-specific port. Untrack it first (git rm --cached .codex/config.toml), then try again.")
+        }
         let dir = root.appending(path: ".codex")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let file = dir.appending(path: "config.toml")
@@ -171,10 +174,11 @@ nonisolated enum MCPConfigWriter {
         }
         let merged = replacingTOMLTable(named: "mcp_servers.ibis", in: existing, with: block)
         try merged.write(to: file, atomically: true, encoding: .utf8)
+        ensureGitignored(".codex/config.toml", root: root)
 
         return Result(
             path: file,
-            message: "Wrote Ibis MCP server to .codex/config.toml. Ibis sets IBIS_MCP_TOKEN automatically in its integrated terminal; to use Codex from another terminal, set IBIS_MCP_TOKEN=\(token) there. Ensure this project is trusted in Codex."
+            message: "Wrote Ibis MCP server to the local, gitignored .codex/config.toml. Ibis sets IBIS_MCP_TOKEN automatically in its integrated terminal; to use Codex from another terminal, set IBIS_MCP_TOKEN=\(token) there. Ensure this project is trusted in Codex."
         )
     }
 
