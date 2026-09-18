@@ -81,7 +81,7 @@ environment keys is refused regardless of trust.
 ## Requirements
 
 - macOS **26.0** (Tahoe) or later.
-- Xcode 26 or the Xcode 27 beta to build.
+- Xcode 26 or Xcode 27 to build.
 
 ## Building
 

@@ -142,7 +142,7 @@ struct FileOutlineView: NSViewRepresentable {
             withObservationTracking {
                 _ = workspace.projectConfig.appearance.accent
             } onChange: { [weak self] in
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.redecorateRows()
                     self.observeProjectAccent()
@@ -425,7 +425,7 @@ struct FileOutlineView: NSViewRepresentable {
             } onChange: { [weak self] in
                 // `onChange` fires *before* the new value lands, so read it (and
                 // re-arm) on the next main-actor hop.
-                Task { @MainActor in
+                Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.redecorateRows()
                     self.observeGitStatus()
@@ -1030,10 +1030,12 @@ final class TreeOutlineView: NSOutlineView, NSServicesMenuRequestor, NSMenuItemV
 // MARK: - App Intents entity annotation (drives the "Ask Siri" item)
 
 #if compiler(>=6.4)
-// `NSTableViewAppIntentsDataSource` exists only in the macOS 27 SDK (Xcode 27,
-// Swift 6.4) — earlier SDKs lack the type entirely, so when building with
-// Xcode 26 the "Ask Siri" row annotation compiles away. The item is macOS
-// 27-gated at runtime anyway, so nothing is lost on macOS 26.
+// The App Intents/AppKit overlay that declares
+// `NSTableViewAppIntentsDataSource` ships with Xcode 27 (Swift 6.4), while
+// Xcode 26's SDK lacks the type entirely. The released SDK marks the API itself
+// available from macOS 15.4; this compiler check is solely what lets the same
+// source continue to build with both Xcode versions. On Xcode 26 the "Ask Siri"
+// row annotation simply compiles away.
 extension FileOutlineView.Coordinator: NSTableViewAppIntentsDataSource {
     func outlineView(_ outlineView: NSOutlineView, appEntityIdentifierFor item: Any?) -> EntityIdentifier? {
         guard let node = item as? FileNode, !node.isDirectory,

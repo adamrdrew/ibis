@@ -5,7 +5,7 @@ import SwiftTerm
 /// bridge to both AppKit (`NSColor`, for the native fg/bg/cursor/selection) and
 /// SwiftTerm's own 16-bit `Color` (for the ANSI palette). Decodes from a
 /// `"#rgb"` / `"#rrggbb"` hex string in the bundled catalog.
-struct ThemeColor: Sendable, Hashable, Decodable {
+nonisolated struct ThemeColor: Sendable, Hashable, Decodable {
     let red: Double
     let green: Double
     let blue: Double
